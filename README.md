@@ -294,8 +294,11 @@ npm run seed
 ### 2. Frontend → Vercel
 
 Set **Root Directory to `frontend`** — Vercel usually detects this itself.
-[`frontend/vercel.json`](frontend/vercel.json) supplies the SPA rewrite, without
-which every deep link would 404 on refresh. Add one environment variable:
+[`frontend/vercel.json`](frontend/vercel.json) pins the install, build and output
+paths *relative to that root*, plus the SPA rewrite, without which every deep link
+would 404 on refresh. Leave Build & Development Settings in the dashboard on their
+defaults: an override there saying `--prefix frontend` resolves to `frontend/frontend`
+and the install fails. Add one environment variable:
 
 ```
 VITE_API_URL = https://safepay-api.onrender.com
