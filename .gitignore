@@ -5,3 +5,4 @@ dist/
 backend/.data/
 *.log
 .DS_Store
+.vite/
