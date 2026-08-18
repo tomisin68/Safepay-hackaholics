@@ -1,0 +1,881 @@
+openapi: 3.0.3
+
+info:
+  title: SafePay API
+  version: "1.0.0"
+  description: |
+    **Trusted payments, everywhere.**
+
+    SafePay is an escrow, settlement and trust-scoring layer for Nigeria. Any
+    application — a marketplace, a freelance platform, a storefront, a landlord's
+    portal — can plug in so that a transaction between two people who do not fully
+    trust each other becomes safe by default.
+
+    ## Authentication
+
+    Two credentials reach the same endpoints:
+
+    | Credential | Header | Used by |
+    |---|---|---|
+    | Dashboard session (JWT) | `Authorization: Bearer eyJ…` | The SafePay web app |
+    | API key | `Authorization: Bearer sk_test_…` | Partner applications |
+
+    Keys come in pairs. `sk_test_` keys operate on simulated settlement — build the
+    entire flow, including disputes and webhooks, without moving a naira.
+    SafePay stores only a SHA-256 hash of every key, so a lost key is rotated,
+    never recovered.
+
+    ## Money
+
+    Every amount crosses the wire as an **integer in kobo** (`amountKobo`). Endpoints
+    that create an escrow also accept `amount` in naira as a convenience, and convert
+    it. Floating point never touches a balance.
+
+    ## Errors
+
+    Failures return a consistent envelope:
+
+    ```json
+    { "error": { "code": "conflict", "message": "An escrow that is \"released\" cannot move to \"released\"." } }
+    ```
+
+    ## Rate limits
+
+    Responses carry `RateLimit-Limit`, `RateLimit-Remaining` and `RateLimit-Reset`.
+    Public score lookups allow 240 requests/minute per caller; escrow endpoints 120.
+  contact:
+    name: SafePay
+    url: https://safepay.ng
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:4600
+    description: Local development
+  - url: https://api.safepay.ng
+    description: Production
+
+tags:
+  - name: Auth
+    description: Accounts and dashboard sessions.
+  - name: Escrows
+    description: The escrow lifecycle — create, fund, deliver, release.
+  - name: Disputes
+    description: Raising and resolving disputes, with automatic triage.
+  - name: SafeScore
+    description: Portable trust scores. Public — no authentication required.
+  - name: Developer
+    description: Apps, API keys, webhooks and usage logs.
+  - name: Admin
+    description: Operations console. Admin accounts only.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Auth]
+      summary: Service health
+      security: []
+      responses:
+        "200":
+          description: The service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  service: { type: string, example: safepay-api }
+                  version: { type: string, example: "1.0.0" }
+
+  /v1/auth/signup:
+    post:
+      tags: [Auth]
+      summary: Create an account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string, example: Ada Okonkwo }
+                email: { type: string, format: email, example: ada@example.com }
+                password: { type: string, minLength: 8, example: correct-horse-battery }
+                phone: { type: string, example: "+2348012345678" }
+      responses:
+        "201":
+          description: Account created; a session token is returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Signed in.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: The signed-in account and its SafeScore
+      responses:
+        "200":
+          description: Account with full score breakdown.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  score: { $ref: "#/components/schemas/Score" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      tags: [Auth]
+      summary: Update the signed-in account
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                phone: { type: string }
+                verificationTier:
+                  type: string
+                  enum: [none, phone, bvn_nin, address]
+      responses:
+        "200":
+          description: Updated, with the recalculated score.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  score: { $ref: "#/components/schemas/Score" }
+
+  /v1/escrows:
+    post:
+      tags: [Escrows]
+      summary: Create an escrow
+      description: |
+        Creates an escrow in `created` state. No money moves until it is funded.
+
+        For `service_milestone`, the milestone amounts must sum exactly to the
+        escrow total — SafePay rejects the request otherwise rather than silently
+        reconciling the difference.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  enum: [goods, service_milestone, rental, recurring, in_person]
+                amount:
+                  type: number
+                  description: Amount in naira. Ignored when `amountKobo` is supplied.
+                  example: 185000
+                amountKobo:
+                  type: integer
+                  description: Canonical amount in kobo.
+                  example: 18500000
+                title: { type: string, example: iPhone 13 Pro, 256GB }
+                description: { type: string }
+                sellerId: { type: string }
+                sellerEmail:
+                  type: string
+                  format: email
+                  description: Used when the counterparty is not yet a SafePay user; they are invited.
+                role:
+                  type: string
+                  enum: [buyer, seller]
+                  default: buyer
+                  description: Whether the caller is paying or being paid.
+                milestones:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      title: { type: string }
+                      amount: { type: number }
+                      amountKobo: { type: integer }
+            examples:
+              goods:
+                summary: A phone sale
+                value:
+                  type: goods
+                  amount: 185000
+                  title: iPhone 13 Pro, 256GB
+                  sellerEmail: seller@example.com
+              milestones:
+                summary: Freelance work in three stages
+                value:
+                  type: service_milestone
+                  amount: 450000
+                  title: Brand website build
+                  milestones:
+                    - { title: Design mockups, amount: 150000 }
+                    - { title: Frontend build, amount: 200000 }
+                    - { title: CMS and handover, amount: 100000 }
+      responses:
+        "201":
+          description: Escrow created.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  escrow: { $ref: "#/components/schemas/Escrow" }
+                  flags:
+                    type: array
+                    description: Fraud-detection labels raised on creation, if any.
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+    get:
+      tags: [Escrows]
+      summary: List escrows
+      parameters:
+        - { name: status, in: query, schema: { type: string }, description: "Comma-separated statuses." }
+        - { name: type, in: query, schema: { type: string } }
+        - { name: role, in: query, schema: { type: string, enum: [buyer, seller] } }
+      responses:
+        "200":
+          description: Escrows the caller is party to, with a summary.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  escrows:
+                    type: array
+                    items: { $ref: "#/components/schemas/Escrow" }
+                  summary: { $ref: "#/components/schemas/EscrowSummary" }
+
+  /v1/escrows/{id}:
+    get:
+      tags: [Escrows]
+      summary: Retrieve an escrow with its ledger
+      parameters: [{ $ref: "#/components/parameters/EscrowId" }]
+      responses:
+        "200":
+          description: The escrow and its append-only money trail.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  escrow: { $ref: "#/components/schemas/Escrow" }
+                  ledger:
+                    type: array
+                    items: { $ref: "#/components/schemas/LedgerEntry" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/escrows/{id}/fund:
+    post:
+      tags: [Escrows]
+      summary: Fund an escrow
+      description: Buyer only. Moves `created` → `funded` and starts the auto-release clock.
+      parameters: [{ $ref: "#/components/parameters/EscrowId" }]
+      responses:
+        "200": { $ref: "#/components/responses/EscrowResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/escrows/{id}/deliver:
+    post:
+      tags: [Escrows]
+      summary: Mark as delivered
+      description: Seller only. Moves `funded` → `in_progress`.
+      parameters: [{ $ref: "#/components/parameters/EscrowId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, example: Dispatched via GIG, tracking 4471. }
+      responses:
+        "200": { $ref: "#/components/responses/EscrowResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/escrows/{id}/release:
+    post:
+      tags: [Escrows]
+      summary: Release the funds
+      description: |
+        Buyer only, and **irreversible**. Pays the seller, collects the platform fee,
+        contributes to the Buyer Protection Reserve, and recalculates both parties'
+        SafeScores.
+      parameters: [{ $ref: "#/components/parameters/EscrowId" }]
+      responses:
+        "200": { $ref: "#/components/responses/EscrowResponse" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/escrows/{id}/cancel:
+    post:
+      tags: [Escrows]
+      summary: Cancel an unfunded escrow
+      parameters: [{ $ref: "#/components/parameters/EscrowId" }]
+      responses:
+        "200": { $ref: "#/components/responses/EscrowResponse" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/escrows/{id}/milestones/{milestoneId}/approve:
+    post:
+      tags: [Escrows]
+      summary: Approve and release one milestone
+      description: Buyer only. Releases that portion; approving the last one settles the escrow.
+      parameters:
+        - { $ref: "#/components/parameters/EscrowId" }
+        - { name: milestoneId, in: path, required: true, schema: { type: string }, example: ms_2 }
+      responses:
+        "200": { $ref: "#/components/responses/EscrowResponse" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/escrows/claim:
+    post:
+      tags: [Escrows]
+      summary: Claim an in-person escrow by code
+      description: The buyer scans the seller's QR (or types the short code) to join the escrow.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, example: KRT4-9WQP }
+      responses:
+        "200": { $ref: "#/components/responses/EscrowResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/disputes:
+    post:
+      tags: [Disputes]
+      summary: Raise a dispute
+      description: |
+        Freezes the escrow and classifies the complaint before any human reads it —
+        category, severity, confidence and a suggested next step for the reviewer.
+        Uses Gemini when configured, and a deterministic rule-based classifier
+        otherwise, so the flow never depends on a third party being up.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [escrowId, reason]
+              properties:
+                escrowId: { type: string }
+                reason: { type: string, minLength: 12 }
+                evidenceUrls:
+                  type: array
+                  items: { type: string, format: uri }
+      responses:
+        "201":
+          description: Dispute opened and triaged.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dispute: { $ref: "#/components/schemas/Dispute" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    get:
+      tags: [Disputes]
+      summary: List disputes
+      description: Regular accounts see their own; admins see everything.
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [open, under_review, resolved] } }
+      responses:
+        "200":
+          description: Disputes visible to the caller.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  disputes:
+                    type: array
+                    items: { $ref: "#/components/schemas/Dispute" }
+
+  /v1/disputes/{id}/resolve:
+    post:
+      tags: [Disputes]
+      summary: Resolve a dispute
+      description: Admin only. Settles the escrow and updates both SafeScores.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome:
+                  type: string
+                  enum: [release_to_seller, refund_buyer]
+                note: { type: string }
+                coverFromReserve:
+                  type: boolean
+                  description: Pay the refund out of the Buyer Protection Reserve.
+      responses:
+        "200":
+          description: Resolved.
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/score/{userId}:
+    get:
+      tags: [SafeScore]
+      summary: Look up a SafeScore
+      description: |
+        **Public — no authentication required.** This is reputation portability: any
+        third-party application can check a seller before money changes hands, the way
+        a credit bureau works, but for everyday trading.
+
+        Accepts a user id or an email address. The full component breakdown and total
+        value settled are returned only to the score's owner or an admin.
+      security: []
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string }, example: usr_JbRmBoCmk1JrSKft }
+      responses:
+        "200":
+          description: The public trust profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicScore" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/score/{userId}/badge.svg:
+    get:
+      tags: [SafeScore]
+      summary: Embeddable Trust Badge
+      description: |
+        Returns a self-contained SVG. Drop it anywhere an image works — an Instagram
+        bio link, a WhatsApp storefront, a website — with no SDK and no JavaScript:
+
+        ```html
+        <img src="https://api.safepay.ng/v1/score/usr_123/badge.svg" width="300" height="76">
+        ```
+      security: []
+      parameters:
+        - { name: userId, in: path, required: true, schema: { type: string } }
+        - { name: theme, in: query, schema: { type: string, enum: [light, dark], default: light } }
+      responses:
+        "200":
+          description: An SVG badge, cacheable for 5 minutes.
+          content:
+            image/svg+xml:
+              schema: { type: string }
+
+  /v1/developer/apps:
+    post:
+      tags: [Developer]
+      summary: Create an app and issue API keys
+      description: The **only** time raw keys are returned. SafePay stores hashes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                webhookUrl: { type: string, format: uri }
+      responses:
+        "201":
+          description: App created with its key pair.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  app: { $ref: "#/components/schemas/App" }
+                  keys:
+                    type: object
+                    properties:
+                      test: { type: string, example: sk_test_AhpZn4cEtTA_IE16mui_MwQdrqvzPY-8 }
+                      live: { type: string }
+                  notice: { type: string }
+    get:
+      tags: [Developer]
+      summary: List your apps
+      responses:
+        "200":
+          description: Apps owned by the caller.
+
+  /v1/developer/apps/{id}/rotate:
+    post:
+      tags: [Developer]
+      summary: Rotate an API key
+      description: The previous key stops working immediately.
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode: { type: string, enum: [test, live], default: test }
+      responses:
+        "200":
+          description: A new key, shown once.
+
+  /v1/developer/apps/{id}/webhooks:
+    get:
+      tags: [Developer]
+      summary: Webhook delivery log
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses:
+        "200":
+          description: Recent deliveries with attempt counts and errors.
+
+  /v1/admin/overview:
+    get:
+      tags: [Admin]
+      summary: Platform overview
+      description: Totals, 14-day settlement series, Protection Reserve balance and recent ledger.
+      responses:
+        "200":
+          description: Console data.
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: A dashboard session JWT, or an API key beginning `sk_test_` / `sk_live_`.
+
+  parameters:
+    EscrowId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      example: esc_Xk4VrVTBEROWlXi7
+
+  responses:
+    EscrowResponse:
+      description: The updated escrow.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              escrow: { $ref: "#/components/schemas/Escrow" }
+    BadRequest:
+      description: The request was malformed or failed validation.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing or invalid credentials.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated, but not permitted to do this.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such resource.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: The resource is not in a state that allows this transition.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, example: conflict }
+            message: { type: string }
+            details: { type: object }
+
+    User:
+      type: object
+      properties:
+        id: { type: string, example: usr_JbRmBoCmk1JrSKft }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        role: { type: string, enum: [user, admin] }
+        verificationTier: { type: string, enum: [none, phone, bvn_nin, address] }
+        safeScore: { type: integer, example: 68 }
+        scoreTier: { type: string, enum: [new, building, trusted, verified_pro] }
+        createdAt: { type: string, format: date-time }
+
+    AuthResponse:
+      type: object
+      properties:
+        token: { type: string, description: Bearer this on subsequent requests. }
+        user: { $ref: "#/components/schemas/User" }
+
+    Party:
+      type: object
+      nullable: true
+      properties:
+        id: { type: string, nullable: true }
+        name: { type: string }
+        safeScore: { type: integer }
+        scoreTier: { type: string }
+        invited: { type: boolean, description: Present when the counterparty has no SafePay account yet. }
+
+    Milestone:
+      type: object
+      properties:
+        id: { type: string, example: ms_1 }
+        title: { type: string }
+        amountKobo: { type: integer }
+        status: { type: string, enum: [pending, approved] }
+        approvedAt: { type: string, format: date-time, nullable: true }
+
+    Escrow:
+      type: object
+      properties:
+        id: { type: string, example: esc_Xk4VrVTBEROWlXi7 }
+        type: { type: string, enum: [goods, service_milestone, rental, recurring, in_person] }
+        title: { type: string }
+        description: { type: string }
+        status:
+          type: string
+          enum: [created, funded, in_progress, released, disputed, refunded, cancelled, expired]
+        amountKobo: { type: integer, example: 18500000 }
+        feeKobo: { type: integer, example: 277500 }
+        netToSellerKobo: { type: integer, example: 18222500 }
+        currency: { type: string, example: NGN }
+        buyer: { $ref: "#/components/schemas/Party" }
+        seller: { $ref: "#/components/schemas/Party" }
+        milestones:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/Milestone" }
+        claimCode: { type: string, nullable: true, example: KRT4-9WQP }
+        flagged: { type: boolean }
+        autoReleaseAt: { type: string, format: date-time, nullable: true }
+        fundedAt: { type: string, format: date-time, nullable: true }
+        releasedAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              event: { type: string }
+              at: { type: string, format: date-time }
+              note: { type: string, nullable: true }
+
+    EscrowSummary:
+      type: object
+      properties:
+        total: { type: integer }
+        inEscrowKobo: { type: integer }
+        releasedKobo: { type: integer }
+        earnedKobo: { type: integer }
+        openDisputes: { type: integer }
+        awaitingAction: { type: integer }
+
+    LedgerEntry:
+      type: object
+      description: Append-only. A correction is a new, opposite entry — never an edit.
+      properties:
+        id: { type: string }
+        escrowId: { type: string }
+        type: { type: string, enum: [fund, release, refund, fee, reserve, reserve_payout] }
+        amountKobo: { type: integer }
+        note: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    Triage:
+      type: object
+      description: Produced automatically the moment a dispute is filed.
+      properties:
+        category:
+          type: string
+          enum: [non_delivery, not_as_described, service_incomplete, partial_delivery, damaged, likely_fraud, buyer_remorse, other]
+        label: { type: string, example: Likely fraud }
+        severity: { type: string, enum: [low, medium, high, critical] }
+        confidence: { type: number, format: float, example: 0.77 }
+        summary: { type: string }
+        guidance: { type: string, example: Freeze the counterparty account and escalate to compliance before refunding. }
+        source: { type: string, example: "rules", description: "`rules` or `gemini:<model>`." }
+
+    Dispute:
+      type: object
+      properties:
+        id: { type: string }
+        escrowId: { type: string }
+        raisedById: { type: string }
+        raisedByRole: { type: string, enum: [buyer, seller] }
+        againstId: { type: string }
+        reason: { type: string }
+        evidenceUrls:
+          type: array
+          items: { type: string, format: uri }
+        ai: { $ref: "#/components/schemas/Triage" }
+        status: { type: string, enum: [open, under_review, resolved] }
+        resolution:
+          type: object
+          nullable: true
+          properties:
+            outcome: { type: string, enum: [release_to_seller, refund_buyer] }
+            note: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    Score:
+      type: object
+      description: |
+        The full, explainable score. Components are additive and bounded, so the
+        number can always be interrogated — a trust score nobody can audit is a
+        trust score nobody trusts.
+      properties:
+        userId: { type: string }
+        score: { type: integer, minimum: 0, maximum: 100, example: 68 }
+        tier: { type: string, enum: [new, building, trusted, verified_pro] }
+        tierLabel: { type: string, example: Trusted }
+        breakdown:
+          type: object
+          properties:
+            volume: { type: number, description: "Completed deals (max 25)." }
+            value: { type: number, description: "Value settled (max 10)." }
+            reliability: { type: number, description: "Dispute-free record, scaled by evidence (max 25)." }
+            speed: { type: number, description: "Median time to confirm (max 10)." }
+            verification: { type: number, description: "Identity assurance tier (max 15)." }
+            age: { type: number, description: "Account tenure (max 5)." }
+            diversity: { type: number, description: "Distinct counterparties — anti-gaming (max 10)." }
+        weights: { type: object }
+        stats:
+          type: object
+          properties:
+            escrowsCompleted: { type: integer }
+            disputeRatePct: { type: number }
+            uniqueCounterparties: { type: integer }
+            medianReleaseHours: { type: number, nullable: true }
+            totalValueSettledNaira: { type: integer }
+            accountAgeDays: { type: integer }
+            concentrationFlag:
+              type: boolean
+              description: True when volume is concentrated in too few counterparties; the score is capped.
+
+    PublicScore:
+      type: object
+      properties:
+        user:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+            memberSince: { type: string, format: date-time }
+        score: { type: integer, example: 68 }
+        tier: { type: string }
+        tierLabel: { type: string }
+        stats:
+          type: object
+          properties:
+            escrowsCompleted: { type: integer }
+            disputeRatePct: { type: number }
+            uniqueCounterparties: { type: integer }
+            verificationTier: { type: string }
+            medianReleaseHours: { type: number, nullable: true }
+        updatedAt: { type: string, format: date-time }
+
+    App:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        webhookUrl: { type: string, nullable: true }
+        webhookSecret: { type: string, example: whsec_… }
+        subscribedEvents:
+          type: array
+          items: { type: string }
+        testKeyPreview: { type: string, description: Masked. The raw key is shown only at creation or rotation. }
+        liveKeyPreview: { type: string }
+        liveEnabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+
+  examples: {}
+
+webhooks:
+  escrowEvent:
+    post:
+      summary: Signed escrow event
+      description: |
+        SafePay POSTs to your configured endpoint with these headers:
+
+        ```
+        SafePay-Event: escrow.released
+        SafePay-Delivery: whl_…
+        SafePay-Signature: t=1755520000,v1=<hex hmac-sha256>
+        ```
+
+        `v1` is an HMAC-SHA256 over `` `${t}.${rawBody}` `` keyed with your app's
+        `webhookSecret`. Verify it, and reject any request whose timestamp falls
+        outside your tolerance window — that is what stops a captured payload being
+        replayed later.
+
+        Deliveries retry four times with backoff (immediate, 2s, 10s, 60s). Respond
+        `2xx` to acknowledge.
+
+        Events: `escrow.created`, `escrow.funded`, `escrow.delivered`,
+        `escrow.released`, `escrow.disputed`, `escrow.refunded`,
+        `dispute.resolved`, `score.updated`.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: string, example: whl_8fJ2k1LmQ0aZ }
+                event: { type: string, example: escrow.released }
+                createdAt: { type: string, format: date-time }
+                data: { $ref: "#/components/schemas/Escrow" }
+      responses:
+        "200":
+          description: Acknowledged.

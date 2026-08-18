@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="SafePay">
+  <title>SafePay</title>
+  <path d="M256 96 L368 134 V248 C368 328 320 384 256 412 C192 384 144 328 144 248 V134 Z"
+        fill="none" stroke="#981D87" stroke-width="19" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M204 256 L241 294 L320 206"
+        fill="none" stroke="#981D87" stroke-width="21" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="368" cy="134" r="15" fill="#33CBB0"/>
+  <circle cx="144" cy="134" r="15" fill="#33CBB0"/>
+</svg>

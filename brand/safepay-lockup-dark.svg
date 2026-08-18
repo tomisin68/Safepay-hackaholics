@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" role="img" aria-label="SafePay — Trusted payments, everywhere">
+  <title>SafePay — Trusted payments, everywhere</title>
+  <g transform="translate(24,50) scale(0.46875)">
+    <rect width="512" height="512" rx="112" fill="#FFFFFF" opacity="0.08"/>
+    <path d="M256 96 L368 134 V248 C368 328 320 384 256 412 C192 384 144 328 144 248 V134 Z"
+          fill="none" stroke="#FFFFFF" stroke-width="19" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M204 256 L241 294 L320 206"
+          fill="none" stroke="#FFFFFF" stroke-width="21" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="368" cy="134" r="15" fill="#33CBB0"/>
+    <circle cx="144" cy="134" r="15" fill="#33CBB0"/>
+  </g>
+  <text x="300" y="198" font-family="Outfit, 'Inter Tight', Inter, Arial, sans-serif" font-weight="700" font-size="122" letter-spacing="-3" fill="#FFFFFF">Safe<tspan fill="#E884D8">Pay</tspan></text>
+  <text x="304" y="246" font-family="Inter, 'Inter Tight', Arial, sans-serif" font-weight="600" font-size="26" letter-spacing="3.4" fill="#B9A6B7">TRUSTED PAYMENTS, EVERYWHERE</text>
+</svg>

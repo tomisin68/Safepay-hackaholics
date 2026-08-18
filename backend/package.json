@@ -1,0 +1,19 @@
+{
+  "name": "@safepay/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SafePay REST API \u2014 escrow engine, SafeScore, disputes, developer platform.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "seed": "node src/seed.js",
+    "test:e2e": "node test/e2e.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  }
+}

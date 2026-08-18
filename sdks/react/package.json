@@ -1,0 +1,14 @@
+{
+  "name": "@safepay/react",
+  "version": "1.0.0",
+  "description": "React components and hooks for SafePay escrow and trust scores.",
+  "type": "module",
+  "main": "src/index.js",
+  "module": "src/index.js",
+  "files": ["src"],
+  "keywords": ["safepay", "escrow", "payments", "nigeria", "trust"],
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "license": "MIT"
+}

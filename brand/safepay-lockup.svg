@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" role="img" aria-label="SafePay — Trusted payments, everywhere">
+  <title>SafePay — Trusted payments, everywhere</title>
+  <defs>
+    <linearGradient id="lk-badge" x1="0.06" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#B11892"/>
+      <stop offset="1" stop-color="#3B1439"/>
+    </linearGradient>
+    <clipPath id="lk-rc"><rect x="0" y="0" width="512" height="512" rx="112" ry="112"/></clipPath>
+  </defs>
+
+  <g transform="translate(24,50) scale(0.46875)">
+    <g clip-path="url(#lk-rc)">
+      <rect width="512" height="512" fill="url(#lk-badge)"/>
+      <path d="M-40 392 L200 152 L232 184 L-8 424 Z" fill="#FFFFFF" opacity="0.05"/>
+      <path d="M300 -40 L560 220 L560 168 L352 -40 Z" fill="#FFFFFF" opacity="0.05"/>
+    </g>
+    <path d="M256 96 L368 134 V248 C368 328 320 384 256 412 C192 384 144 328 144 248 V134 Z"
+          fill="none" stroke="#FFFFFF" stroke-width="19" stroke-linejoin="round" stroke-linecap="round"/>
+    <path d="M204 256 L241 294 L320 206"
+          fill="none" stroke="#FFFFFF" stroke-width="21" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="368" cy="134" r="15" fill="#33CBB0"/>
+    <circle cx="144" cy="134" r="15" fill="#33CBB0"/>
+  </g>
+
+  <text x="300" y="198" font-family="Outfit, 'Inter Tight', Inter, Arial, sans-serif" font-weight="700" font-size="122" letter-spacing="-3" fill="#3B1439">Safe<tspan fill="#981D87">Pay</tspan></text>
+  <text x="304" y="246" font-family="Inter, 'Inter Tight', Arial, sans-serif" font-weight="600" font-size="26" letter-spacing="3.4" fill="#7A6E79">TRUSTED PAYMENTS, EVERYWHERE</text>
+</svg>

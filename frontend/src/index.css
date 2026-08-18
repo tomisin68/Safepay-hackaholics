@@ -1,0 +1,312 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ==========================================================================
+   SafePay design tokens
+   --------------------------------------------------------------------------
+   Palette derived from Wema Bank's own brand assets: the purple #981D87 is
+   the exact fill of the Wema logo mark, and #B11892 / #3B1439 / #E8323E are
+   lifted from Wema's production stylesheet. #33CBB0 is the teal that closes
+   one of their signature 137deg gradients — here it carries "settled".
+
+   Every colour is a semantic token, never a raw hex in a component, so light
+   and dark are one switch. All pairs verified at WCAG AA or better.
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* surfaces */
+  --c-canvas: #ffffff;
+  --c-surface: #ffffff;
+  --c-raised: #faf8fa;
+  --c-sunken: #f6f2f6;
+  --c-border: #ece5eb;
+  --c-border-strong: #dbcfd9;
+
+  /* text */
+  --c-ink: #20111e;
+  --c-muted: #6b6270;
+  --c-faint: #948b98;
+
+  /* brand */
+  --c-brand: #981d87;
+  --c-brand-strong: #7f1571;
+  --c-brand-ink: #7a1770;
+  --c-brand-soft: #fbedf9;
+  --c-brand-line: #f0d8ed;
+  --c-magenta: #b11892;
+  --c-plum: #3b1439;
+  --c-accent: #0b6b58;
+
+  /* status */
+  --c-success: #0e8a72;
+  --c-success-ink: #0b6b58;
+  --c-success-soft: #e6f7f2;
+  --c-warn: #b4700a;
+  --c-warn-ink: #8a5300;
+  --c-warn-soft: #fdf3e3;
+  --c-danger: #d22030;
+  --c-danger-ink: #a81622;
+  --c-danger-soft: #fdecee;
+  --c-neutral-ink: #4a4550;
+  --c-neutral-soft: #f2f1f4;
+
+  /* elevation — tinted with the brand plum, never neutral grey */
+  --shadow-xs: 0 1px 2px rgba(59, 20, 57, 0.06);
+  --shadow-sm: 0 1px 3px rgba(59, 20, 57, 0.07), 0 1px 2px rgba(59, 20, 57, 0.04);
+  --shadow-md: 0 4px 12px rgba(59, 20, 57, 0.08), 0 1px 3px rgba(59, 20, 57, 0.05);
+  --shadow-lg: 0 12px 32px rgba(59, 20, 57, 0.12), 0 2px 8px rgba(59, 20, 57, 0.06);
+  --shadow-brand: 0 6px 20px rgba(152, 29, 135, 0.24);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --c-canvas: #140913;
+  --c-surface: #1d0f1b;
+  --c-raised: #241323;
+  --c-sunken: #180d17;
+  --c-border: #382134;
+  --c-border-strong: #4d2f48;
+
+  --c-ink: #fbf7fa;
+  --c-muted: #b9a6b7;
+  --c-faint: #8d7c8b;
+
+  --c-brand: #b11892;
+  --c-brand-strong: #c93aab;
+  --c-brand-ink: #e884d8;
+  --c-brand-soft: #2c1229;
+  --c-brand-line: #47204170;
+  --c-magenta: #d454c2;
+  --c-plum: #2a0f28;
+  --c-accent: #33cbb0;
+
+  --c-success: #33cbb0;
+  --c-success-ink: #5ee0c4;
+  --c-success-soft: #10312b;
+  --c-warn: #e0921f;
+  --c-warn-ink: #f3b75c;
+  --c-warn-soft: #33220c;
+  --c-danger: #e8323e;
+  --c-danger-ink: #ff8a94;
+  --c-danger-soft: #351317;
+  --c-neutral-ink: #c9bcc7;
+  --c-neutral-soft: #251b24;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-brand: 0 6px 20px rgba(177, 24, 146, 0.35);
+}
+
+@theme inline {
+  --color-canvas: var(--c-canvas);
+  --color-surface: var(--c-surface);
+  --color-raised: var(--c-raised);
+  --color-sunken: var(--c-sunken);
+  --color-line: var(--c-border);
+  --color-line-strong: var(--c-border-strong);
+
+  --color-ink: var(--c-ink);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
+
+  --color-brand: var(--c-brand);
+  --color-brand-strong: var(--c-brand-strong);
+  --color-brand-ink: var(--c-brand-ink);
+  --color-brand-soft: var(--c-brand-soft);
+  --color-brand-line: var(--c-brand-line);
+  --color-magenta: var(--c-magenta);
+  --color-plum: var(--c-plum);
+  --color-accent: var(--c-accent);
+
+  --color-success: var(--c-success);
+  --color-success-ink: var(--c-success-ink);
+  --color-success-soft: var(--c-success-soft);
+  --color-warn: var(--c-warn);
+  --color-warn-ink: var(--c-warn-ink);
+  --color-warn-soft: var(--c-warn-soft);
+  --color-danger: var(--c-danger);
+  --color-danger-ink: var(--c-danger-ink);
+  --color-danger-soft: var(--c-danger-soft);
+  --color-neutral-ink: var(--c-neutral-ink);
+  --color-neutral-soft: var(--c-neutral-soft);
+
+  --font-display: 'Outfit', 'Inter Tight', system-ui, sans-serif;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --radius-card: 14px;
+  --radius-field: 10px;
+
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-brand: var(--shadow-brand);
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+* {
+  border-color: var(--c-border);
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--c-canvas);
+  color: var(--c-ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  letter-spacing: -0.022em;
+  line-height: 1.15;
+  margin: 0;
+}
+
+/* Money and identifiers get tabular figures so columns line up and digits
+   never jitter as a value updates. */
+.numeric {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* One focus treatment everywhere. Never removed — only restyled. */
+:focus-visible {
+  outline: 2px solid var(--c-brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+button, [role='button'], a, select, summary {
+  cursor: pointer;
+}
+
+button:disabled, [role='button'][aria-disabled='true'] {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: var(--c-brand);
+  color: #fff;
+}
+
+/* Scrollbars that belong to the palette rather than the OS */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--c-border-strong);
+  border-radius: 99px;
+  border: 3px solid var(--c-canvas);
+}
+
+/* ==========================================================================
+   Motion — 150-260ms, meaningful only, and fully surrendered when the user
+   asks for less.
+   ========================================================================== */
+
+@keyframes sp-fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes sp-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes sp-scale-in {
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes sp-pulse-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(152, 29, 135, 0.35); }
+  70%  { box-shadow: 0 0 0 10px rgba(152, 29, 135, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(152, 29, 135, 0); }
+}
+@keyframes sp-shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+@keyframes sp-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes sp-draw {
+  from { stroke-dashoffset: var(--dash, 200); }
+}
+
+.animate-fade-up { animation: sp-fade-up 0.34s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade    { animation: sp-fade 0.26s ease-out both; }
+.animate-scale-in{ animation: sp-scale-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-pulse-ring { animation: sp-pulse-ring 2s ease-out infinite; }
+.animate-spin-slow { animation: sp-spin 0.7s linear infinite; }
+
+.skeleton {
+  background: linear-gradient(90deg, var(--c-sunken) 25%, var(--c-raised) 37%, var(--c-sunken) 63%);
+  background-size: 200% 100%;
+  animation: sp-shimmer 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ==========================================================================
+   Composite utilities used across the app
+   ========================================================================== */
+
+.card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.hairline {
+  border-bottom: 1px solid var(--c-border);
+}
+
+/* The one place a gradient is allowed: the brand surface itself, at Wema's
+   own 137deg. Everywhere else the purple is a flat, deliberate accent. */
+.brand-gradient {
+  background-image: linear-gradient(137deg, #b11892 6%, #3b1439 90%);
+}
+.brand-gradient-soft {
+  background-image: linear-gradient(137deg, #981d87 0%, #5a1a54 100%);
+}
+
+.grid-texture {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.055) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+  background-size: 56px 56px;
+}

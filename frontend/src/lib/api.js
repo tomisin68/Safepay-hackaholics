@@ -1,0 +1,136 @@
+/**
+ * Thin API client.
+ *
+ * One place that knows about tokens, error shape, and the base URL — so no
+ * component ever touches fetch directly.
+ */
+
+const BASE = import.meta.env.VITE_API_URL || '';
+const TOKEN_KEY = 'safepay.token';
+
+export const getToken = () => localStorage.getItem(TOKEN_KEY);
+export const setToken = (token) => {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+};
+
+export class ApiError extends Error {
+  constructor(message, { status, code, details } = {}) {
+    super(message);
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
+
+async function request(path, { method = 'GET', body, auth = true, signal } = {}) {
+  const headers = {};
+  if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const token = getToken();
+  if (auth && token) headers.Authorization = `Bearer ${token}`;
+
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers,
+      signal,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    if (err.name === 'AbortError') throw err;
+    throw new ApiError('Cannot reach SafePay. Check your connection and try again.', { status: 0 });
+  }
+
+  if (res.status === 204) return null;
+
+  const text = await res.text();
+  let data = null;
+  try {
+    if (text) data = JSON.parse(text);
+  } catch {
+    // A non-JSON body (a proxy error page, say) is not fatal — fall through
+    // with data still null and let the status code drive the outcome.
+  }
+
+  if (!res.ok) {
+    // A dead session should not strand the user on a broken screen.
+    if (res.status === 401 && auth && token) {
+      setToken(null);
+      if (!location.pathname.startsWith('/login')) {
+        location.assign(`/login?next=${encodeURIComponent(location.pathname)}`);
+      }
+    }
+    throw new ApiError(data?.error?.message || `Request failed (${res.status})`, {
+      status: res.status,
+      code: data?.error?.code,
+      details: data?.error?.details,
+    });
+  }
+
+  return data;
+}
+
+const get = (path, opts) => request(path, { ...opts, method: 'GET' });
+const post = (path, body, opts) => request(path, { ...opts, method: 'POST', body: body ?? {} });
+const patch = (path, body, opts) => request(path, { ...opts, method: 'PATCH', body: body ?? {} });
+const del = (path, opts) => request(path, { ...opts, method: 'DELETE' });
+
+export const api = {
+  request,
+
+  auth: {
+    signup: (payload) => post('/v1/auth/signup', payload, { auth: false }),
+    login: (payload) => post('/v1/auth/login', payload, { auth: false }),
+    me: () => get('/v1/auth/me'),
+    updateMe: (payload) => patch('/v1/auth/me', payload),
+    directory: (q = '') => get(`/v1/auth/directory?q=${encodeURIComponent(q)}`),
+  },
+
+  escrows: {
+    list: (params = '') => get(`/v1/escrows${params}`),
+    get: (id) => get(`/v1/escrows/${id}`),
+    create: (payload) => post('/v1/escrows', payload),
+    fund: (id) => post(`/v1/escrows/${id}/fund`),
+    deliver: (id, note) => post(`/v1/escrows/${id}/deliver`, { note }),
+    release: (id) => post(`/v1/escrows/${id}/release`),
+    cancel: (id) => post(`/v1/escrows/${id}/cancel`),
+    approveMilestone: (id, milestoneId) => post(`/v1/escrows/${id}/milestones/${milestoneId}/approve`),
+    claim: (code) => post('/v1/escrows/claim', { code }),
+  },
+
+  disputes: {
+    list: (params = '') => get(`/v1/disputes${params}`),
+    get: (id) => get(`/v1/disputes/${id}`),
+    create: (payload) => post('/v1/disputes', payload),
+    resolve: (id, payload) => post(`/v1/disputes/${id}/resolve`, payload),
+    review: (id) => post(`/v1/disputes/${id}/review`),
+  },
+
+  score: {
+    get: (userId) => get(`/v1/score/${encodeURIComponent(userId)}`, { auth: true }),
+    public: (userId) => get(`/v1/score/${encodeURIComponent(userId)}`, { auth: false }),
+    badgeUrl: (userId, theme = 'light') =>
+      `${BASE || location.origin}/v1/score/${encodeURIComponent(userId)}/badge.svg?theme=${theme}`,
+  },
+
+  developer: {
+    apps: () => get('/v1/developer/apps'),
+    createApp: (payload) => post('/v1/developer/apps', payload),
+    updateApp: (id, payload) => patch(`/v1/developer/apps/${id}`, payload),
+    rotate: (id, mode) => post(`/v1/developer/apps/${id}/rotate`, { mode }),
+    revoke: (id) => del(`/v1/developer/apps/${id}`),
+    webhooks: (id) => get(`/v1/developer/apps/${id}/webhooks`),
+    requests: (id) => get(`/v1/developer/apps/${id}/requests`),
+    testWebhook: (id) => post(`/v1/developer/apps/${id}/webhooks/test`),
+  },
+
+  admin: {
+    overview: () => get('/v1/admin/overview'),
+    flags: () => get('/v1/admin/flags'),
+    reviewFlag: (id, action) => post(`/v1/admin/flags/${id}/${action}`),
+    users: () => get('/v1/admin/users'),
+    sweep: () => post('/v1/admin/sweep'),
+  },
+};
