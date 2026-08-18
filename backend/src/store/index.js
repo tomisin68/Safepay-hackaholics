@@ -14,7 +14,15 @@ import { fileURLToPath } from 'node:url';
  */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../../.data');
+
+/**
+ * `DATA_DIR` points at a mounted persistent disk in production (Render mounts
+ * one at /var/data). Locally it falls back to backend/.data, so a clean
+ * checkout still runs with no configuration at all.
+ */
+const DATA_DIR = process.env.DATA_DIR
+  ? path.resolve(process.env.DATA_DIR)
+  : path.resolve(__dirname, '../../.data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 const EMPTY = {

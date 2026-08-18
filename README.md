@@ -263,14 +263,51 @@ curl http://localhost:4600/v1/score/tunde@safepay.test
 
 ## Deployment
 
-| Piece | Target | Notes |
-|---|---|---|
-| Frontend | Vercel / Netlify | `npm --prefix frontend run build` → `frontend/dist`. Set `VITE_API_URL`. |
-| Backend | Render / Firebase Functions | `npm --prefix backend start`. Set `JWT_SECRET`, `WEB_ORIGIN`, optionally `GEMINI_API_KEY`. |
-| Data | Firestore | Swap `backend/src/store/index.js` for a `firebase-admin` adapter — same interface. |
+Frontend on Vercel, API on Render. The split is deliberate: the escrow ledger is
+a file on disk, so the API needs a host that keeps one. On a serverless platform
+the filesystem is ephemeral and every signup would vanish on the next request.
 
-Before going live: set a real `JWT_SECRET`, move the store to Firestore, and
-connect settlement to Wema virtual accounts in place of the simulated ledger.
+### 1. API → Render
+
+The repo ships a blueprint. **New → Blueprint → pick this repo**, and
+[`render.yaml`](render.yaml) provisions the service, mounts a 1 GB disk at
+`/var/data`, and generates `JWT_SECRET` for you.
+
+Then set one variable by hand once the frontend is live:
+
+```
+WEB_ORIGIN = https://<your-app>.vercel.app
+```
+
+Optionally add `GEMINI_API_KEY` — without it, dispute triage uses the
+rule-based classifier and still works.
+
+Seed the demo data from the Render shell:
+
+```bash
+npm run seed
+```
+
+> The free plan sleeps when idle, so the first request after a nap takes ~30s.
+> Wake it before a live demo.
+
+### 2. Frontend → Vercel
+
+[`vercel.json`](vercel.json) handles the build and the SPA rewrite, so **Root
+Directory stays `./`** — do not point Vercel at `frontend/`. Add one environment
+variable:
+
+```
+VITE_API_URL = https://safepay-api.onrender.com
+```
+
+It is read at build time, so redeploy after changing it.
+
+### Before real money
+
+Set a real `JWT_SECRET`, swap `backend/src/store/index.js` for a `firebase-admin`
+adapter (the interface is already Firestore-shaped), and connect settlement to
+Wema virtual accounts in place of the simulated ledger.
 
 ---
 

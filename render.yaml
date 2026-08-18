@@ -1,0 +1,56 @@
+# Render blueprint for the SafePay API.
+#
+# Render runs a long-lived Node process with a mountable disk, which is what the
+# escrow ledger needs: the JSON store persists, the auto-release sweeper keeps
+# ticking, and webhook retries survive between requests.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo.
+
+services:
+  - type: web
+    name: safepay-api
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+
+    # The ledger lives here. Without a disk the store resets on every deploy
+    # and every cold start.
+    disk:
+      name: safepay-data
+      mountPath: /var/data
+      sizeGB: 1
+
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+
+      - key: NODE_ENV
+        value: production
+
+      # Persistent disk mount — read by backend/src/store/index.js
+      - key: DATA_DIR
+        value: /var/data
+
+      # Generated once by Render and kept across deploys. Never commit a real one.
+      - key: JWT_SECRET
+        generateValue: true
+
+      # Comma-separated browser origins allowed to call the API.
+      # Set this to your Vercel URL after the frontend is deployed, e.g.
+      #   https://safepay-hackaholics.vercel.app
+      - key: WEB_ORIGIN
+        sync: false
+
+      # Optional. Without it, dispute triage falls back to the deterministic
+      # rule-based classifier and the feature still works.
+      - key: GEMINI_API_KEY
+        sync: false
+
+      - key: PLATFORM_FEE_BPS
+        value: "150"
+
+      - key: RESERVE_SHARE_BPS
+        value: "2000"

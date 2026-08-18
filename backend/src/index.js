@@ -23,8 +23,25 @@ const PORT = Number(process.env.PORT || 4000);
 app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
+/**
+ * In production `WEB_ORIGIN` pins the browser origins allowed to call the API
+ * (comma-separated). Left unset — as it is locally — any origin is reflected,
+ * so the dev server and curl both work without configuration.
+ *
+ * The public score and badge endpoints set their own `Access-Control-Allow-Origin: *`,
+ * because reputation portability is the whole point of them.
+ */
+const ALLOWED_ORIGINS = (process.env.WEB_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
 app.use(cors({
-  origin: true,
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);          // curl, server-to-server
+    if (ALLOWED_ORIGINS.length === 0) return callback(null, true);
+    return callback(null, ALLOWED_ORIGINS.includes(origin.replace(/\/$/, '')));
+  },
   credentials: true,
   exposedHeaders: ['RateLimit-Limit', 'RateLimit-Remaining', 'RateLimit-Reset'],
 }));
