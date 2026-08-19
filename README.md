@@ -95,6 +95,13 @@ The seed prints a sandbox API key on every run:
 curl -H "Authorization: Bearer sk_test_..." http://localhost:4600/v1/escrows
 ```
 
+> Seeded accounts are pre-verified, so they sign straight in. There is no mailbox
+> behind `@safepay.test` to collect a code from, and demanding one would lock the
+> demo out of its own data. Accounts created through the signup form still have to
+> clear the [email verification gate](#5-email-and-the-verification-gate) — and
+> with no `RESEND_API_KEY` set, the code is printed to the API's console, so the
+> flow is walkable locally with no email account at all.
+
 ---
 
 ## A five-minute demo path
@@ -125,10 +132,11 @@ safepay/
 ├── backend/            Node + Express REST API
 │   └── src/
 │       ├── routes/         auth · escrows · disputes · score · developer · admin
-│       ├── services/       escrowEngine · scoreEngine · aiTriage · fraud · ledger · webhookDispatcher
-│       ├── middleware/      auth (session + API key) · rateLimiter
-│       ├── lib/             crypto · money · errors
-│       └── store/           persistence, shaped like Firestore
+│       ├── services/       escrowEngine · scoreEngine · aiTriage · fraud · ledger
+│       │                   webhookDispatcher · otp · mailer · identity
+│       ├── middleware/      auth (session JWT + Firebase ID token + API key) · rateLimiter
+│       ├── lib/             crypto · money · errors · firebaseAdmin
+│       └── store/           Firestore write-through, with a local JSON mirror
 ├── frontend/           React + Vite + Tailwind v4
 │   └── src/
 │       ├── pages/          landing · auth · dashboard · escrows · disputes · trust · developer · admin
@@ -137,6 +145,7 @@ safepay/
 │       └── index.css        the design tokens
 ├── sdks/react/         @safepay/react — SafePayButton, TrustBadge, hooks
 ├── brand/              logo, in Wema's palette
+├── firestore.rules     deny-all: nothing in the browser touches Firestore
 └── docs/               openapi.yaml · BRAND.md
 ```
 
@@ -156,11 +165,33 @@ transition and every route validates against it, so a double-release returns a
 { "error": { "code": "conflict", "message": "An escrow that is \"released\" cannot move to \"released\"." } }
 ```
 
-**Storage is swappable.** `store/index.js` exposes a Firestore-shaped API
-(`collection(name).get/set/find/update`), backed by an atomically-written JSON
-file. Production swaps that one file for `firebase-admin` without touching a
-single route or service. The hackathon build boots with zero credentials, which
-is what a judge actually needs.
+**Storage is write-through, so the routes stay synchronous.** `store/index.js`
+exposes a Firestore-shaped API (`collection(name).get/set/find/update`). Reads are
+served from memory; writes land in memory, then go to Firestore in a coalesced
+background batch and to an atomically-written JSON mirror. That is what lets
+`users.get(id)` return a user rather than a promise — turning the whole codebase
+async to reach Firestore would have been a rewrite of every route and service, for
+no behavioural gain on a single node. A Firestore hiccup cannot fail an escrow
+release: memory and the local mirror are already correct, and the next mutation of
+that document re-sends it. With no credentials the mirror is the whole store, so a
+clean clone boots with zero configuration — which is what a judge actually needs.
+
+**Email verification is enforced by absence, not by a prompt.** Signup returns no
+token at all; only `verify-email` mints one. See
+[the verification gate](#5-email-and-the-verification-gate). Codes are hashed with
+an HMAC keyed by `JWT_SECRET`, compared in constant time, single-use, and burned
+after five attempts — a six-digit code is only 10⁶ wide, so the attempt ceiling is
+what actually secures it.
+
+**Firebase Auth is load-bearing, not decorative.** Every account gets a real Auth
+record created with SafePay's own id as its uid, so the two systems need no mapping
+table. `emailVerified` there tracks the OTP gate, disabling an account in the
+console locks it out of the API, and the session middleware accepts a Firebase ID
+token as readily as its own JWT — so adding Google or phone sign-in later touches
+no middleware. Passwords are still verified locally against scrypt: the seeded demo
+accounts have no Firebase records and judges must be able to sign into them, and it
+keeps sign-in off the network path so an Identity Toolkit blip cannot lock everyone
+out of a live escrow.
 
 **AI never becomes a dependency.** Dispute triage calls Gemini when
 `GEMINI_API_KEY` is set, with an 8-second timeout — and falls back to a
@@ -234,6 +265,19 @@ the money", not "status: FUNDED".
 Full reference at `/docs` (OpenAPI 3.0, in [`docs/openapi.yaml`](docs/openapi.yaml)).
 
 ```bash
+# sign up — note the 202 and the absence of a token
+curl -X POST http://localhost:4600/v1/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{ "name": "Ada Okonkwo", "email": "ada@example.com", "password": "correct-horse-battery" }'
+# { "verificationRequired": true, "challengeId": "otp_...", "email": "a****@example.com",
+#   "expiresInMinutes": 10 }
+
+# exchange the emailed code for a session — the only way a new account gets one
+curl -X POST http://localhost:4600/v1/auth/verify-email \
+  -H "Content-Type: application/json" \
+  -d '{ "challengeId": "otp_...", "code": "418203" }'
+# { "token": "eyJ...", "user": { ..., "emailVerified": true } }
+
 # create an escrow
 curl -X POST http://localhost:4600/v1/escrows \
   -H "Authorization: Bearer sk_test_..." \
@@ -249,6 +293,10 @@ curl http://localhost:4600/v1/score/tunde@safepay.test
 
 | | |
 |---|---|
+| `POST /v1/auth/signup` | Create an account — returns a challenge, **not** a token |
+| `POST /v1/auth/verify-email` | Exchange the emailed code for a session |
+| `POST /v1/auth/resend-code` | New code; invalidates the previous one |
+| `POST /v1/auth/login` | Sign in — also fires an alert email |
 | `POST /v1/escrows` | Create |
 | `POST /v1/escrows/:id/fund` | Buyer funds it |
 | `POST /v1/escrows/:id/deliver` | Seller marks delivered |
@@ -263,9 +311,24 @@ curl http://localhost:4600/v1/score/tunde@safepay.test
 
 ## Deployment
 
-Frontend on Vercel, API on Render. The split is deliberate: the escrow ledger is
-a file on disk, so the API needs a host that keeps one. On a serverless platform
-the filesystem is ephemeral and every signup would vanish on the next request.
+Frontend on Vercel, API on Render. The split is deliberate: the API is a
+long-lived process, which is what the auto-release sweeper, the webhook retry
+queue and the in-process rate limiters all assume. On a serverless platform each
+of those would need re-architecting around a scheduler and an external store.
+
+Deploying takes **five variables on Render** and one on Vercel:
+
+| Where | Variable | Why |
+|---|---|---|
+| Render | `FIREBASE_SERVICE_ACCOUNT` | Firestore + Firebase Auth ([§4](#4-firebase-authentication-and-firestore)) |
+| Render | `RESEND_API_KEY` | Verification codes and sign-in alerts ([§5](#5-email-and-the-verification-gate)) |
+| Render | `MAIL_FROM` | Must be a Resend-verified domain |
+| Render | `APP_URL` | The frontend URL, for buttons inside emails |
+| Render | `WEB_ORIGIN` | CORS allow-list — the frontend URL |
+| Vercel | `VITE_API_URL` | Where the API lives |
+
+`JWT_SECRET` is generated for you by the blueprint. Everything else has a working
+default.
 
 ### 1. API → Render
 
@@ -357,26 +420,114 @@ Control it explicitly with `VITE_DEMO_MODE`:
 **Set `VITE_DEMO_MODE=false` once the API is live**, so an outage is visible
 rather than silently papered over.
 
-### 4. Firebase
+### 4. Firebase: Authentication and Firestore
 
-[`frontend/src/lib/firebase.js`](frontend/src/lib/firebase.js) initialises the
-web SDK for project `safepay-6227f` and loads Analytics lazily, after first
-paint, guarded by `isSupported()` — `getAnalytics()` throws in browsers without
-cookies or IndexedDB, and a measurement pixel must never be able to blank a
-payments app.
+Both run server-side, through `firebase-admin`. The API holds the service
+account; the browser never talks to Firestore at all.
 
-The web config is not a secret: Firebase ships it in every client bundle and
-enforces access through Security Rules. It is still read from
-`VITE_FIREBASE_*` variables (see [`frontend/.env.example`](frontend/.env.example))
-so a fork can point at its own project without editing source. Leave
-`VITE_FIREBASE_MEASUREMENT_ID` empty to switch Analytics off entirely.
+**Set one variable on Render** — the service-account JSON, base64-encoded so the
+private key's newlines cannot be mangled by a dashboard paste:
 
+```bash
+node -e "console.log(Buffer.from(require('fs').readFileSync('serviceAccountKey.json','utf8')).toString('base64'))"
+```
+
+```
+FIREBASE_SERVICE_ACCOUNT = <that base64 string>
+```
+
+Raw JSON on one line works too — [`backend/src/lib/firebaseAdmin.js`](backend/src/lib/firebaseAdmin.js)
+accepts either, and also takes `FIREBASE_PROJECT_ID` + `FIREBASE_CLIENT_EMAIL` +
+`FIREBASE_PRIVATE_KEY` separately if you prefer three short values to one long one.
+
+**Two things must be switched on in the Firebase console**, or the API falls back
+to its local store and logs why:
+
+1. **Firestore Database → Create database.** The Cloud Firestore API is off on a
+   new project, and the SDK's error for that is a bare `PERMISSION_DENIED`.
+2. **Authentication → Sign-in method → Email/Password → Enable.**
+
+Then **publish [`firestore.rules`](firestore.rules)**, which denies all client
+access. That is the correct rule here rather than a placeholder: nothing in the
+browser reads Firestore, and the Admin SDK bypasses rules entirely — so deny-all
+costs the app nothing. Leaving Firestore in test mode would be the largest hole in
+the deployment, because the public web config in the bundle is enough for anyone
+to point a Firestore client at the project and read the whole ledger.
+
+| Piece | Where | What it does |
+|---|---|---|
+| **Firestore** | [`backend/src/store/index.js`](backend/src/store/index.js) | Durable source of truth. Hydrated into memory at boot, then written through on every mutation — which is what keeps every route and service synchronous. |
+| **Firebase Auth** | [`backend/src/services/identity.js`](backend/src/services/identity.js) | A real Auth record per account, created with SafePay's own id as its uid so no mapping table is needed. `emailVerified` mirrors the OTP gate; disabling an account in the console locks it out here. |
+| **ID tokens** | [`backend/src/middleware/auth.js`](backend/src/middleware/auth.js) | The API accepts a Firebase ID token from any client SDK as well as its own session JWT, so adding Google or phone sign-in later needs no change to the middleware. |
+| **Analytics** | [`frontend/src/lib/firebase.js`](frontend/src/lib/firebase.js) | The only Firebase the browser touches. Loaded lazily after first paint, guarded by `isSupported()` — `getAnalytics()` throws in browsers without cookies or IndexedDB, and a measurement pixel must never blank a payments app. |
+
+The web config is not a secret; Firebase ships it in every client bundle and
+enforces access through Security Rules. It is still read from `VITE_FIREBASE_*`
+(see [`frontend/.env.example`](frontend/.env.example)) so a fork can point at its
+own project without editing source. Leave `VITE_FIREBASE_MEASUREMENT_ID` empty to
+switch Analytics off entirely.
+
+**With no Firebase credentials the API still boots** and serves everything from
+its local JSON file. That is what lets a judge clone and run with no secrets. Check
+which mode a deploy is in at `/health`:
+
+```json
+{ "store": { "backend": "firestore", "durable": true },
+  "firebase": { "connected": true, "projectId": "safepay-6227f" },
+  "email": { "provider": "resend", "configured": true } }
+```
+
+`store.backend` reports what the store is *actually doing*, not what it was
+configured to do — the two diverge exactly when it matters, and `durable: false`
+with a `reason` is how an unenabled Firestore shows up.
+
+### 5. Email and the verification gate
+
+Transactional email goes through **Resend**. Set two variables on Render:
+
+```
+RESEND_API_KEY = re_...
+MAIL_FROM      = SafePay <noreply@your-verified-domain.com>
+APP_URL        = https://<your-app>.vercel.app
+```
+
+> **`onboarding@resend.dev` only delivers to the address that owns the Resend
+> account.** It is fine for a first test and is the usual reason a demo signup
+> never receives its code. Verify a domain in Resend and point `MAIL_FROM` at it
+> before anyone else tries to sign up.
+
+Three emails, all in [`backend/src/services/mailer.js`](backend/src/services/mailer.js):
+
+| Email | Trigger |
+|---|---|
+| **Verification code** | Signup, and any login by an account that never verified |
+| **Sign-in alert** | Every successful sign-in — with time, IP and user agent |
+| **Welcome** | Once, the moment an address is proven |
+
+**Email verification is compulsory, and enforced by absence rather than by a
+prompt.** `POST /v1/auth/signup` answers `202` and issues *no session token*; the
+only route that mints one for a new account is `POST /v1/auth/verify-email`. A
+correct password on an unverified account gets the same `202` and a fresh code, so
+there is no path to a session that skips the mailbox. The code itself
+([`backend/src/services/otp.js`](backend/src/services/otp.js)) is six digits from
+`crypto.randomInt`, stored only as an HMAC-SHA256 keyed by `JWT_SECRET`, compared
+in constant time, single-use, valid ten minutes, and burned after five wrong
+attempts. `sendInBackground` keeps the sign-in alert off the response path, so a
+slow mail provider cannot slow down a login.
+
+`npm --prefix backend run test:auth` asserts all of that — 40 checks, most of them
+asserting that something is *impossible*.
+
+**With no `RESEND_API_KEY` the mailer prints codes to the server log** instead of
+sending, so a credential-less clone can still complete a signup. Never run a
+production deploy that way: the log then contains live codes. `/health` reports
+`email.configured` so you can tell at a glance.
 
 ### Before real money
 
-Set a real `JWT_SECRET`, swap `backend/src/store/index.js` for a `firebase-admin`
-adapter (the interface is already Firestore-shaped), and connect settlement to
-Wema virtual accounts in place of the simulated ledger.
+Set a real `JWT_SECRET`, publish [`firestore.rules`](firestore.rules), verify a
+sending domain in Resend, and connect settlement to Wema virtual accounts in place
+of the simulated ledger.
 
 ---
 
@@ -388,6 +539,10 @@ Wema virtual accounts in place of the simulated ledger.
 - [x] Backend runs with zero configuration
 - [x] OpenAPI reference served at `/docs`
 - [x] Demo data and accounts seeded
+- [x] Firebase Auth + Firestore wired, credentials from the environment only
+- [x] Compulsory email OTP on signup, alert email on every sign-in
+- [x] `firestore.rules` denies all client access — publish before going live
+- [x] Tests green — `npm --prefix backend run test:auth` (40) and `test:e2e` (20)
 - [x] Frontend deployed — https://safepay-hackaholics-nu.vercel.app
 - [x] Deployed link usable with no backend (demo mode)
 - [ ] Backend deployed — *add URL*

@@ -11,6 +11,9 @@ import { IconShieldCheck, IconExternal, IconGlobe, IconSpark, IconCheck } from '
 
 const TIERS = [
   { value: 'none', label: 'Not verified', points: 0 },
+  /* Awarded automatically by the signup OTP, never chosen here. Listed so the
+     ladder reads completely and a freshly verified account can see where it sits. */
+  { value: 'email', label: 'Email verified', points: 3 },
   { value: 'phone', label: 'Phone verified', points: 5 },
   { value: 'bvn_nin', label: 'BVN / NIN verified', points: 12 },
   { value: 'address', label: 'Address verified', points: 15 },

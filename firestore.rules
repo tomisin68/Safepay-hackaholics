@@ -1,0 +1,36 @@
+rules_version = '2';
+
+/**
+ * SafePay Firestore security rules.
+ *
+ * Deny everything. That is not a placeholder — it is the correct rule for this
+ * architecture, and leaving Firestore in its default "test mode" instead would be
+ * the single largest hole in the app.
+ *
+ * Why deny-all is right:
+ *
+ *   - Nothing in the browser reads or writes Firestore. The web bundle loads
+ *     firebase/app and firebase/analytics only; every piece of data reaches the
+ *     UI through the SafePay API, which enforces sessions, roles, ownership, and
+ *     rate limits that a security rule cannot express. See frontend/src/lib/api.js.
+ *
+ *   - The API uses the Admin SDK, which authenticates as a service account and
+ *     bypasses these rules entirely. So denying client access costs the app
+ *     nothing at all.
+ *
+ *   - The Firebase web config in the client bundle is public by design. Anyone
+ *     can read it out of the shipped JS and point the Firestore client SDK at
+ *     this project. Test-mode rules (`allow read, write: if true`) would hand
+ *     that person the entire escrow ledger, every user record, and the API key
+ *     hashes. Deny-all is what makes the public config harmless.
+ *
+ * Deploy:  firebase deploy --only firestore:rules
+ * Or paste into  Firebase console -> Firestore Database -> Rules -> Publish.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

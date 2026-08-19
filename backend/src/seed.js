@@ -1,5 +1,8 @@
 import 'dotenv/config';
-import { users, escrows, disputes, apps, resetAll, flushNow } from './store/index.js';
+import {
+  users, escrows, disputes, apps,
+  resetAll, flushNow, pushAllToFirestore, storeBackend,
+} from './store/index.js';
 import { hashPassword, randomId, generateApiKey, hashApiKey, claimCode } from './lib/crypto.js';
 import { toKobo } from './lib/money.js';
 import { recalculate } from './services/scoreEngine.js';
@@ -40,9 +43,17 @@ for (const p of PEOPLE) {
     phone: '+23480' + String(10000000 + Math.floor(Math.random() * 8999999)),
     passwordHash: hashPassword('password123'),
     role: p.role,
+    /* Seeded accounts are pre-verified. They exist so a judge can sign straight
+     * in, and there is no mailbox behind @safepay.test to collect a code from —
+     * so demanding one would lock the demo out of its own data. Every account
+     * created through /v1/auth/signup still has to clear the OTP gate. */
+    emailVerified: true,
+    emailVerifiedAt: daysAgo(p.age),
     verificationTier: p.tier,
     safeScore: 0,
     scoreTier: 'new',
+    firebaseUid: null,
+    lastLoginAt: daysAgo(Math.min(p.age, 2)),
     createdAt: daysAgo(p.age),
     updatedAt: daysAgo(p.age),
   });
@@ -183,6 +194,17 @@ apps.set(appId, {
 /* ------------------------------- SafeScores ------------------------------ */
 for (const uid of Object.values(id)) recalculate(uid);
 flushNow();
+
+/* The write-through in store/index.js only mirrors documents as they change, so
+ * a seed would otherwise sit in memory until something happened to touch it.
+ * Push the whole set up front: a freshly seeded deploy is then durable
+ * immediately, and survives the first restart rather than the second. */
+if (storeBackend === 'firestore') {
+  const mirrored = await pushAllToFirestore();
+  console.log(mirrored.ok
+    ? '  Mirrored the seed to Firestore.'
+    : '  Could not mirror to Firestore (see the error above). The local store is seeded and usable.');
+}
 
 /* --------------------------------- report -------------------------------- */
 const line = (label, value) => console.log(`  ${label.padEnd(22)} ${value}`);

@@ -57,14 +57,21 @@ export default function Signup() {
 
     setLoading(true);
     try {
-      const user = await signup({
+      const result = await signup({
         name: form.name.trim(),
         email: form.email.trim(),
         phone: form.phone.trim() || undefined,
         password: form.password,
       });
-      toast.success('Account created', `Welcome to SafePay, ${user.name.split(' ')[0]}.`);
-      navigate('/app', { replace: true });
+
+      /* Signing up no longer signs you in — the account is inert until the
+       * emailed code is entered. The challenge travels in router state rather
+       * than the URL so it stays out of history and referrers. */
+      toast.info('Check your email', 'We sent you a 6-digit code to confirm your address.');
+      navigate('/verify', {
+        replace: true,
+        state: { challengeId: result.challengeId, email: result.email, next: '/app' },
+      });
     } catch (err) {
       setFormError(err.message);
     } finally {
@@ -183,7 +190,10 @@ export default function Signup() {
         </Button>
 
         <ul className="mt-1 flex flex-col gap-1.5">
-          {['No monthly fee — 1.5% only when an escrow settles', 'Sandbox API keys included from day one'].map((line) => (
+          {['We email a 6-digit code to confirm your address',
+            'No monthly fee — 1.5% only when an escrow settles',
+            'Sandbox API keys included from day one',
+          ].map((line) => (
             <li key={line} className="flex items-start gap-2 text-[0.79rem] text-muted">
               <IconCheck size={13} className="mt-0.5 shrink-0 text-success" />
               {line}

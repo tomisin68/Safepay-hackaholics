@@ -3,17 +3,20 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "SafePay REST API \u2014 escrow engine, SafeScore, disputes, developer platform.",
+  "description": "SafePay REST API — escrow engine, SafeScore, disputes, developer platform.",
   "main": "src/index.js",
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
     "seed": "node src/seed.js",
-    "test:e2e": "node test/e2e.mjs"
+    "test:e2e": "node test/e2e.mjs",
+    "test:auth": "node test/auth.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "firebase-admin": "^14.2.0",
+    "resend": "^6.20.0"
   }
 }

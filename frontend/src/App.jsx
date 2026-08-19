@@ -6,6 +6,7 @@ import { LogoMark } from './brand/Logo';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import VerifyEmail from './pages/VerifyEmail';
 import Dashboard from './pages/Dashboard';
 import Escrows from './pages/Escrows';
 import NewEscrow from './pages/NewEscrow';
@@ -55,6 +56,11 @@ export default function App() {
 
       <Route path="/login" element={<GuestOnly><Login /></GuestOnly>} />
       <Route path="/signup" element={<GuestOnly><Signup /></GuestOnly>} />
+
+      {/* Deliberately NOT wrapped in GuestOnly: the whole point of this screen is
+          that the visitor has no session yet, and it is reached from /login as
+          well as /signup. It guards itself on the challenge in router state. */}
+      <Route path="/verify" element={<VerifyEmail />} />
 
       <Route path="/app" element={<Protected><Dashboard /></Protected>} />
       <Route path="/app/escrows" element={<Protected><Escrows /></Protected>} />

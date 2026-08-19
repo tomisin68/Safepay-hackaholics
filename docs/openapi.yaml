@@ -94,6 +94,10 @@ paths:
     post:
       tags: [Auth]
       summary: Create an account
+      description: >
+        Creates the account and emails a six-digit code. No session token is
+        issued here: a new account is inert until its address is proven, so the
+        only way forward is `POST /v1/auth/verify-email`.
       security: []
       requestBody:
         required: true
@@ -108,11 +112,13 @@ paths:
                 password: { type: string, minLength: 8, example: correct-horse-battery }
                 phone: { type: string, example: "+2348012345678" }
       responses:
-        "201":
-          description: Account created; a session token is returned.
+        "202":
+          description: >
+            Account created and a code emailed. Not a session — exchange the code
+            for one at /v1/auth/verify-email.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/AuthResponse" }
+              schema: { $ref: "#/components/schemas/VerificationRequired" }
         "409": { $ref: "#/components/responses/Conflict" }
         "400": { $ref: "#/components/responses/BadRequest" }
 
@@ -120,6 +126,14 @@ paths:
     post:
       tags: [Auth]
       summary: Sign in
+      description: >
+        Returns a session token on 200. An account that never completed email
+        verification answers 202 with a fresh challenge instead — a correct
+        password is not on its own enough to obtain a session.
+
+
+        Every successful sign-in also triggers an alert email to the account
+        holder, with the time, IP address, and user agent of the request.
       security: []
       requestBody:
         required: true
@@ -137,7 +151,76 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/AuthResponse" }
+        "202":
+          description: Correct password, but the email address is still unverified.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerificationRequired" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The account has been suspended.
+
+  /v1/auth/verify-email:
+    post:
+      tags: [Auth]
+      summary: Exchange an emailed code for a session
+      description: >
+        The only route that turns an unverified account into a usable one.
+
+
+        Codes are six digits, valid for ten minutes, single-use, and allow five
+        attempts before the challenge is burned. A burned or expired challenge
+        cannot be revived — sign in again for a new one.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challengeId, code]
+              properties:
+                challengeId: { type: string, example: otp_9Fk2xQpLm4Rt }
+                code: { type: string, pattern: "^[0-9]{6}$", example: "418203" }
+      responses:
+        "200":
+          description: Verified; a session token is returned.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthResponse" }
+        "400":
+          description: The code is wrong, expired, or already used.
+        "429":
+          description: Too many attempts. The challenge has been burned.
+
+  /v1/auth/resend-code:
+    post:
+      tags: [Auth]
+      summary: Email a fresh code
+      description: >
+        Rotates the code on an existing challenge, which invalidates the previous
+        one and resets its attempt counter. Rate limited to one request per
+        minute per challenge and five per challenge in total.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challengeId]
+              properties:
+                challengeId: { type: string }
+      responses:
+        "200":
+          description: A new code has been emailed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VerificationRequired" }
+        "400":
+          description: The challenge is unknown or already spent.
+        "429":
+          description: Still inside the cooldown, or too many codes requested.
 
   /v1/auth/me:
     get:
@@ -645,9 +728,17 @@ components:
         email: { type: string, format: email }
         phone: { type: string, nullable: true }
         role: { type: string, enum: [user, admin] }
-        verificationTier: { type: string, enum: [none, phone, bvn_nin, address] }
+        emailVerified:
+          type: boolean
+          description: >
+            False only for an account that has not yet cleared the OTP gate. Such
+            an account holds no session and is hidden from the counterparty
+            directory, so in practice every user you can see here is true.
+          example: true
+        verificationTier: { type: string, enum: [none, email, phone, bvn_nin, address] }
         safeScore: { type: integer, example: 68 }
         scoreTier: { type: string, enum: [new, building, trusted, verified_pro] }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
 
     AuthResponse:
@@ -655,6 +746,30 @@ components:
       properties:
         token: { type: string, description: Bearer this on subsequent requests. }
         user: { $ref: "#/components/schemas/User" }
+
+    VerificationRequired:
+      type: object
+      description: >
+        Returned instead of a session whenever an email address still has to be
+        proven. Deliberately carries no token and no code — only the handle needed
+        to submit one.
+      properties:
+        verificationRequired:
+          type: boolean
+          example: true
+        challengeId:
+          type: string
+          description: Pass this back to /v1/auth/verify-email alongside the code.
+          example: otp_9Fk2xQpLm4Rt
+        email:
+          type: string
+          description: >
+            Masked, so a client can say which mailbox to check without the
+            response echoing an address the caller may only have guessed.
+          example: a****@example.com
+        expiresInMinutes:
+          type: integer
+          example: 10
 
     Party:
       type: object

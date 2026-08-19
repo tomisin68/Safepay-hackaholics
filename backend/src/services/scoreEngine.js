@@ -19,7 +19,7 @@ export const WEIGHTS = {
   diversity: 10,     // how many *different* people vouch for them
 };
 
-const VERIFICATION_POINTS = { none: 0, phone: 5, bvn_nin: 12, address: 15 };
+const VERIFICATION_POINTS = { none: 0, email: 3, phone: 5, bvn_nin: 12, address: 15 };
 
 const clamp01 = (n) => Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0));
 const logScale = (value, ceiling) => clamp01(Math.log1p(Math.max(0, value)) / Math.log1p(ceiling));

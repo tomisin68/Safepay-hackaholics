@@ -14,7 +14,12 @@ import adminRoutes from './routes/admin.js';
 
 import { ApiError } from './lib/errors.js';
 import { sweepAutoReleases } from './services/escrowEngine.js';
-import { flushNow, users } from './store/index.js';
+import {
+  flushNow, users, hydrateFromFirestore, drainSync, storeBackend, storeHealth,
+} from './store/index.js';
+import { firebaseReady, projectId } from './lib/firebaseAdmin.js';
+import { mailerReady } from './services/mailer.js';
+import { purgeExpiredChallenges } from './services/otp.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -55,8 +60,22 @@ app.use((_req, res, next) => {
   next();
 });
 
+/**
+ * Liveness plus a read on the optional subsystems, which is what you actually
+ * want at 3am on demo day: it answers "is Firestore attached and is mail going
+ * out" without needing the logs. Booleans only — never the credentials behind
+ * them, since this endpoint is public.
+ */
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'safepay-api', version: '1.0.0', time: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    service: 'safepay-api',
+    version: '1.0.0',
+    store: storeHealth(),
+    firebase: firebaseReady ? { connected: true, projectId } : { connected: false },
+    email: { provider: 'resend', configured: mailerReady },
+    time: new Date().toISOString(),
+  });
 });
 
 app.get('/', (_req, res) => {
@@ -68,6 +87,7 @@ app.get('/', (_req, res) => {
     openapi: '/openapi.yaml',
     endpoints: {
       auth: '/v1/auth',
+      verifyEmail: '/v1/auth/verify-email',
       escrows: '/v1/escrows',
       disputes: '/v1/disputes',
       score: '/v1/score/:userId',
@@ -129,7 +149,28 @@ app.use((err, _req, res, _next) => {
 });
 
 /* ------------------------------ first boot -------------------------------
- * Hosts without shell access (Render's free plan, for one) give you no way to
+ * Order matters here, and the ordering is the whole point:
+ *
+ *   1. pull Firestore into memory, so the seed check below sees the real user
+ *      count rather than an empty local mirror. Get this backwards and every
+ *      restart re-seeds on top of live data;
+ *   2. seed only if that count is genuinely zero;
+ *   3. only then start listening.
+ *
+ * Top-level await in an ES module is what makes step 3 safe: no request can
+ * arrive against a half-loaded store.
+ * ------------------------------------------------------------------------ */
+if (firebaseReady) {
+  const hydrated = await hydrateFromFirestore();
+  if (hydrated.ok) {
+    const total = Object.values(hydrated.counts).reduce((a, b) => a + b, 0);
+    console.log(`  Firestore    ->  loaded ${total} documents from ${projectId}`);
+  } else {
+    console.warn(`  Firestore    ->  unavailable (${hydrated.error}); serving the local mirror`);
+  }
+}
+
+/* Hosts without shell access (Render's free plan, for one) give you no way to
  * run `npm run seed`, so a fresh deploy would come up with an empty database
  * and every demo account bouncing off the login screen. With SEED_ON_EMPTY set,
  * the API seeds itself the first time it finds no users.
@@ -138,8 +179,7 @@ app.use((err, _req, res, _next) => {
  * only runs against a database with zero users — so it can populate an empty
  * deploy but can never overwrite real data, however many times the service
  * restarts. If the host has no persistent disk and the store resets, the next
- * boot simply re-seeds.
- * ------------------------------------------------------------------------ */
+ * boot simply re-seeds. */
 if (process.env.SEED_ON_EMPTY === 'true' && users.count() === 0) {
   console.log('  Empty database and SEED_ON_EMPTY=true — loading demo data...');
   // Importing runs the seed script; it is a top-level program, not a module of
@@ -151,17 +191,34 @@ if (process.env.SEED_ON_EMPTY === 'true' && users.count() === 0) {
 const sweeper = setInterval(sweepAutoReleases, 60_000);
 sweeper.unref?.();
 
+/* Spent and expired OTP challenges are dead weight once their window closes, and
+ * left alone the collection would only ever grow. Hourly is plenty for rows with
+ * a ten-minute life. */
+const otpSweeper = setInterval(() => {
+  const removed = purgeExpiredChallenges();
+  if (removed > 0) console.log(`[otp] purged ${removed} expired challenge(s)`);
+}, 3_600_000);
+otpSweeper.unref?.();
+
 const server = app.listen(PORT, () => {
   console.log(`\n  SafePay API  ->  http://localhost:${PORT}`);
   console.log(`  Docs         ->  http://localhost:${PORT}/docs`);
+  console.log(`  Store        ->  ${storeBackend === 'firestore' ? `Firestore (${projectId})` : 'local JSON file'}`);
+  console.log(`  Auth         ->  ${firebaseReady ? 'Firebase Auth mirror active' : 'local only (no Firebase creds)'}`);
+  console.log(`  Email        ->  ${mailerReady ? 'Resend' : 'NOT CONFIGURED - codes print to this log'}`);
   console.log(`  AI triage    ->  ${process.env.GEMINI_API_KEY ? 'Gemini' : 'rule-based fallback'}\n`);
   sweepAutoReleases();
 });
 
+let shuttingDown = false;
 for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => {
+  process.on(signal, async () => {
+    if (shuttingDown) return; // Render sends SIGTERM then SIGKILL; don't double-drain
+    shuttingDown = true;
     console.log('\nShutting down, flushing store...');
     flushNow();
+    // Anything still queued for Firestore would otherwise be lost on a redeploy.
+    await drainSync().catch(() => {});
     server.close(() => process.exit(0));
   });
 }

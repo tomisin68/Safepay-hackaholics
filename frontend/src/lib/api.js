@@ -140,8 +140,20 @@ export const api = {
   request,
 
   auth: {
+    /**
+     * Both of these can answer in one of two shapes:
+     *
+     *   { token, user }                          signed in
+     *   { verificationRequired, challengeId, …}  an email code is outstanding
+     *
+     * Signup always returns the second. Login returns it too when the account
+     * never finished verifying — see AppProviders, which is the one place that
+     * has to tell them apart.
+     */
     signup: (payload) => post('/v1/auth/signup', payload, { auth: false }),
     login: (payload) => post('/v1/auth/login', payload, { auth: false }),
+    verifyEmail: (payload) => post('/v1/auth/verify-email', payload, { auth: false }),
+    resendCode: (challengeId) => post('/v1/auth/resend-code', { challengeId }, { auth: false }),
     me: () => get('/v1/auth/me'),
     updateMe: (payload) => patch('/v1/auth/me', payload),
     directory: (q = '') => get(`/v1/auth/directory?q=${encodeURIComponent(q)}`),

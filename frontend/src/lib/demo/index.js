@@ -143,7 +143,7 @@ async function route(method, path, query, body, token) {
       if (body?.name) patch.name = String(body.name).trim().slice(0, 80);
       if (body?.phone) patch.phone = String(body.phone).trim().slice(0, 24);
       if (body?.verificationTier) {
-        if (!['none', 'phone', 'bvn_nin', 'address'].includes(body.verificationTier)) {
+        if (!['none', 'email', 'phone', 'bvn_nin', 'address'].includes(body.verificationTier)) {
           throw engine.badRequest('Unknown verification tier.');
         }
         patch.verificationTier = body.verificationTier;

@@ -97,21 +97,60 @@ function AuthProvider({ children }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const login = useCallback(async (credentials) => {
-    const data = await api.auth.login(credentials);
+  /**
+   * Adopts a `{ token, user }` response as the live session.
+   *
+   * `refresh()` afterwards is not redundant: the login response carries the user
+   * but not the SafeScore, and every screen behind the shell expects both.
+   */
+  const adopt = useCallback(async (data) => {
     setToken(data.token);
     setUser(data.user);
     await refresh();
-    return data.user;
+    return { status: 'signed_in', user: data.user };
   }, [refresh]);
 
+  /**
+   * Signup, login, and code verification all resolve to one of two shapes:
+   *
+   *   { status: 'signed_in',   user }
+   *   { status: 'verify',      challengeId, email, expiresInMinutes }
+   *
+   * Callers switch on `status` rather than guessing from what happens to be
+   * present. Errors still throw — a discriminated result is for the two *valid*
+   * outcomes, not for failure.
+   */
+  const login = useCallback(async (credentials) => {
+    const data = await api.auth.login(credentials);
+    if (data?.verificationRequired) {
+      return {
+        status: 'verify',
+        challengeId: data.challengeId,
+        email: data.email,
+        expiresInMinutes: data.expiresInMinutes,
+      };
+    }
+    return adopt(data);
+  }, [adopt]);
+
+  /** Always returns `status: 'verify'` — the API issues no token at signup. */
   const signup = useCallback(async (payload) => {
     const data = await api.auth.signup(payload);
-    setToken(data.token);
-    setUser(data.user);
-    await refresh();
-    return data.user;
-  }, [refresh]);
+    return {
+      status: 'verify',
+      challengeId: data.challengeId,
+      email: data.email,
+      expiresInMinutes: data.expiresInMinutes,
+    };
+  }, []);
+
+  /** Trades a correct emailed code for a session. */
+  const verifyEmail = useCallback(async ({ challengeId, code }) => {
+    const data = await api.auth.verifyEmail({ challengeId, code });
+    return adopt(data);
+  }, [adopt]);
+
+  const resendCode = useCallback((challengeId) => api.auth.resendCode(challengeId), []);
 
   const logout = useCallback(() => {
     setToken(null);
@@ -120,8 +159,12 @@ function AuthProvider({ children }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, score, loading, login, signup, logout, refresh, isAdmin: user?.role === 'admin' }),
-    [user, score, loading, login, signup, logout, refresh],
+    () => ({
+      user, score, loading,
+      login, signup, verifyEmail, resendCode, logout, refresh,
+      isAdmin: user?.role === 'admin',
+    }),
+    [user, score, loading, login, signup, verifyEmail, resendCode, logout, refresh],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

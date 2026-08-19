@@ -60,3 +60,30 @@ services:
 
       - key: RESERVE_SHARE_BPS
         value: "2000"
+
+      # --- Firebase Admin (Authentication + Firestore) -------------------
+      # The whole service-account JSON, base64-encoded. Base64 rather than raw
+      # JSON because the private key's newlines survive a dashboard paste that
+      # way; the loader accepts either. Generate with:
+      #   node -e "console.log(Buffer.from(require('fs').readFileSync('serviceAccountKey.json','utf8')).toString('base64'))"
+      #
+      # Unset, the API still boots and serves from its local disk. Set, Firestore
+      # becomes the durable source of truth and every signup also creates a
+      # Firebase Auth user.
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+
+      # --- Resend (transactional email) ----------------------------------
+      # Required in production. Without it the OTP mailer falls back to printing
+      # codes into this service's log, which is not something to run live.
+      - key: RESEND_API_KEY
+        sync: false
+
+      # Must be a domain verified in Resend. onboarding@resend.dev works for a
+      # first test but only delivers to the Resend account owner's address.
+      - key: MAIL_FROM
+        sync: false
+
+      # Public URL of the frontend. Used for the buttons inside emails.
+      - key: APP_URL
+        sync: false

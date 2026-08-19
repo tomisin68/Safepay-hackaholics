@@ -46,9 +46,23 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const user = await login({ email: form.email.trim(), password: form.password });
-      toast.success(`Welcome back, ${user.name.split(' ')[0]}`);
-      navigate(params.get('next') || '/app', { replace: true });
+      const next = params.get('next') || '/app';
+      const result = await login({ email: form.email.trim(), password: form.password });
+
+      /* An account that never finished verifying gets sent to the code screen
+       * instead of a session — the password was right, the address is still
+       * unproven. A fresh code is already on its way by the time we get here. */
+      if (result.status === 'verify') {
+        toast.info('Confirm your email first', 'We sent a new 6-digit code to your inbox.');
+        navigate('/verify', {
+          replace: true,
+          state: { challengeId: result.challengeId, email: result.email, next },
+        });
+        return;
+      }
+
+      toast.success(`Welcome back, ${result.user.name.split(' ')[0]}`);
+      navigate(next, { replace: true });
     } catch (err) {
       setFormError(err.message);
     } finally {
