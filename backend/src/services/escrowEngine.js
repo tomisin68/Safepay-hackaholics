@@ -5,6 +5,7 @@ import * as ledgerSvc from './ledger.js';
 import * as fraud from './fraud.js';
 import { recalculate } from './scoreEngine.js';
 import { broadcast } from './webhookDispatcher.js';
+import { notifyEscrow } from './escrowNotifier.js';
 
 export const ESCROW_TYPES = ['goods', 'service_milestone', 'rental', 'recurring', 'in_person'];
 
@@ -128,6 +129,7 @@ export function create({ buyerId, sellerId, sellerEmail, type, amountKobo, title
 
   const saved = escrows.get(id);
   broadcast([saved.buyerId, saved.sellerId], 'escrow.created', publicView(saved));
+  notifyEscrow(saved, 'created');
   return { escrow: saved, flags };
 }
 
@@ -157,6 +159,7 @@ export function fund(id, userId) {
 
   fraud.evaluate(userId, next);
   broadcast([next.buyerId, next.sellerId], 'escrow.funded', publicView(next));
+  notifyEscrow(next, 'funded');
   return next;
 }
 
@@ -170,6 +173,7 @@ export function markDelivered(id, userId, note) {
 
   const next = touch(escrow, { status: 'in_progress', note: note ?? null }, 'delivered');
   broadcast([next.buyerId, next.sellerId], 'escrow.delivered', publicView(next));
+  notifyEscrow(next, 'delivered');
   return next;
 }
 
@@ -201,6 +205,7 @@ export function release(id, userId, { reason = 'buyer_confirmed' } = {}) {
 
   for (const uid of [next.buyerId, next.sellerId].filter(Boolean)) recalculate(uid);
   broadcast([next.buyerId, next.sellerId], 'escrow.released', publicView(next));
+  notifyEscrow(next, 'released');
   return next;
 }
 
@@ -238,6 +243,8 @@ export function approveMilestone(id, milestoneId, userId) {
   }, `milestone_approved:${target.title}`);
 
   if (allApproved) return release(id, userId, { reason: 'all_milestones_approved' });
+
+  notifyEscrow(next, 'milestone', { milestone: target });
   return next;
 }
 
@@ -250,6 +257,7 @@ export function markDisputed(id, userId) {
   assertTransition(escrow.status, 'disputed');
   const next = touch(escrow, { status: 'disputed', disputedAt: new Date().toISOString() }, 'disputed');
   broadcast([next.buyerId, next.sellerId], 'escrow.disputed', publicView(next));
+  notifyEscrow(next, 'disputed');
   return next;
 }
 
@@ -269,6 +277,7 @@ export function refund(id, { reason = 'dispute_resolved', amountKobo } = {}) {
 
   for (const uid of [next.buyerId, next.sellerId].filter(Boolean)) recalculate(uid);
   broadcast([next.buyerId, next.sellerId], 'escrow.refunded', publicView(next));
+  notifyEscrow(next, 'refunded');
   return next;
 }
 
@@ -276,7 +285,15 @@ export function cancel(id, userId) {
   const escrow = getOrThrow(id);
   assertParty(escrow, userId);
   assertTransition(escrow.status, 'cancelled');
-  return touch(escrow, { status: 'cancelled', cancelledAt: new Date().toISOString() }, 'cancelled');
+
+  const next = touch(escrow, { status: 'cancelled', cancelledAt: new Date().toISOString() }, 'cancelled');
+
+  /* No webhook to match this one: `cancelled` was never in the published event
+   * list, and adding a topic partners have not subscribed to is a breaking
+   * change dressed up as a feature. The two people involved still deserve to
+   * be told. */
+  notifyEscrow(next, 'cancelled');
+  return next;
 }
 
 /* ------------------------------------------------------------------ *
@@ -290,7 +307,12 @@ export function claim(code, userId) {
   if (escrow.buyerId && escrow.buyerId !== userId) throw forbidden('This escrow already has a buyer.');
   if (escrow.status !== 'created') throw conflict('This escrow has already been claimed.');
 
-  return escrows.update(escrow.id, { buyerId: userId });
+  const next = escrows.update(escrow.id, { buyerId: userId });
+
+  /* The first moment this escrow has two sides, and the seller is standing
+   * there waiting to know the scan worked. */
+  notifyEscrow(next, 'claimed');
+  return next;
 }
 
 /* ------------------------------------------------------------------ *

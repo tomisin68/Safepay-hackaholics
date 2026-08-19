@@ -73,14 +73,17 @@ services:
       - key: FIREBASE_SERVICE_ACCOUNT
         sync: false
 
-      # --- Resend (transactional email) ----------------------------------
+      # --- Keplars (transactional email) ---------------------------------
       # Required in production. Without it the OTP mailer falls back to printing
       # codes into this service's log, which is not something to run live.
-      - key: RESEND_API_KEY
+      # Dashboard -> API Keys; the "live" kind: kms_<workspaceId>.live_<secret>
+      - key: KEPLARS_API_KEY
         sync: false
 
-      # Must be a domain verified in Resend. onboarding@resend.dev works for a
-      # first test but only delivers to the Resend account owner's address.
+      # Optional. Unset, Keplars sends as the mailbox connected to the
+      # workspace, which is the right default until there is more than one
+      # verified sender to choose between. An address Keplars does not
+      # recognise is rejected rather than silently substituted.
       - key: MAIL_FROM
         sync: false
 

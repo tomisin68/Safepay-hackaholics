@@ -6,7 +6,7 @@
  * signup, no session without the code, no unlimited guesses, no replay.
  *
  * Reading a real code requires reading the email, which a test cannot do. So the
- * server under test is started with RESEND_API_KEY unset, which puts the mailer
+ * server under test is started with KEPLARS_API_KEY unset, which puts the mailer
  * in console mode and prints codes to its log. That is also the assertion that
  * the dev fallback works — without it a credential-less clone could never sign up.
  *

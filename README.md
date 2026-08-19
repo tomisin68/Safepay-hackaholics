@@ -99,7 +99,7 @@ curl -H "Authorization: Bearer sk_test_..." http://localhost:4600/v1/escrows
 > behind `@safepay.test` to collect a code from, and demanding one would lock the
 > demo out of its own data. Accounts created through the signup form still have to
 > clear the [email verification gate](#5-email-and-the-verification-gate) — and
-> with no `RESEND_API_KEY` set, the code is printed to the API's console, so the
+> with no `KEPLARS_API_KEY` set, the code is printed to the API's console, so the
 > flow is walkable locally with no email account at all.
 
 ---
@@ -316,13 +316,13 @@ long-lived process, which is what the auto-release sweeper, the webhook retry
 queue and the in-process rate limiters all assume. On a serverless platform each
 of those would need re-architecting around a scheduler and an external store.
 
-Deploying takes **five variables on Render** and one on Vercel:
+Deploying takes **four variables on Render** and one on Vercel:
 
 | Where | Variable | Why |
 |---|---|---|
 | Render | `FIREBASE_SERVICE_ACCOUNT` | Firestore + Firebase Auth ([§4](#4-firebase-authentication-and-firestore)) |
-| Render | `RESEND_API_KEY` | Verification codes and sign-in alerts ([§5](#5-email-and-the-verification-gate)) |
-| Render | `MAIL_FROM` | Must be a Resend-verified domain |
+| Render | `KEPLARS_API_KEY` | Verification codes and sign-in alerts ([§5](#5-email-and-the-verification-gate)) |
+| Render | `MAIL_FROM` | Optional — defaults to your connected Keplars sender |
 | Render | `APP_URL` | The frontend URL, for buttons inside emails |
 | Render | `WEB_ORIGIN` | CORS allow-list — the frontend URL |
 | Vercel | `VITE_API_URL` | Where the API lives |
@@ -474,7 +474,7 @@ which mode a deploy is in at `/health`:
 ```json
 { "store": { "backend": "firestore", "durable": true },
   "firebase": { "connected": true, "projectId": "safepay-6227f" },
-  "email": { "provider": "resend", "configured": true } }
+  "email": { "provider": "keplars", "configured": true } }
 ```
 
 `store.backend` reports what the store is *actually doing*, not what it was
@@ -483,26 +483,69 @@ with a `reason` is how an unenabled Firestore shows up.
 
 ### 5. Email and the verification gate
 
-Transactional email goes through **Resend**. Set two variables on Render:
+Transactional email goes through **Keplars**. Two variables on Render:
 
 ```
-RESEND_API_KEY = re_...
-MAIL_FROM      = SafePay <noreply@your-verified-domain.com>
-APP_URL        = https://<your-app>.vercel.app
+KEPLARS_API_KEY = kms_<workspaceId>.live_<secret>
+APP_URL         = https://<your-app>.vercel.app
 ```
 
-> **`onboarding@resend.dev` only delivers to the address that owns the Resend
-> account.** It is fine for a first test and is the usual reason a demo signup
-> never receives its code. Verify a domain in Resend and point `MAIL_FROM` at it
-> before anyone else tries to sign up.
+> **`MAIL_FROM` is optional and best left unset.** Omit it and Keplars sends as
+> the mailbox connected to the workspace — the Gmail / Workspace / Outlook
+> account you linked over OAuth, or an address on a domain you verified. Set it
+> only to choose between several verified senders; an address Keplars does not
+> recognise is rejected outright rather than substituted, which is the easiest
+> way to end up with a signup that never receives its code.
 
-Three emails, all in [`backend/src/services/mailer.js`](backend/src/services/mailer.js):
+Keplars splits delivery into priority tiers, and each message asks for the one it
+needs: the OTP goes out `instant` (0-5s), because a code that arrives after the
+user gives up is the same as no code; the sign-in alert `high`; the welcome
+`async`. Nothing here uses the SDK — one `fetch` to
+`POST /api/v1/send-email/{tier}` with a 12-second ceiling and no retries, so a
+struggling mail API can never hold a signup open.
+
+Every template lives in [`backend/src/services/mailer.js`](backend/src/services/mailer.js).
+Three of them belong to the account itself:
 
 | Email | Trigger |
 |---|---|
 | **Verification code** | Signup, and any login by an account that never verified |
 | **Sign-in alert** | Every successful sign-in — with time, IP and user agent |
 | **Welcome** | Once, the moment an address is proven |
+
+The rest follow the money. Every escrow transition mails **both parties**, each in
+their own words — "your payment is held" and "you can start work" are the same
+funding event seen from opposite sides, and sending either party the other's
+version is worse than sending nothing:
+
+| Event | Buyer hears | Seller hears |
+|---|---|---|
+| `created` | You opened an escrow with *X* | *X* opened an escrow with you |
+| `claimed` | You joined *X*'s escrow | Your code was claimed |
+| `funded` | Your payment is held, auto-releases on *date* | Safe to start — the money is out of their hands |
+| `delivered` | *X* says this is delivered | Delivery recorded |
+| `milestone` | You approved *M*, *n* of *m* done | *M* paid, the rest stays in escrow |
+| `released` | This escrow is complete | You have been paid, net of fee |
+| `disputed` | Nothing moves until this is resolved | Nothing moves until this is resolved |
+| `refunded` | Your money is coming back | Refunded to the buyer |
+| `cancelled` | Cancelled before funding, no money moved | Cancelled before funding, no money moved |
+
+**A seller invited by bare email address gets all of it.** `POST /v1/escrows`
+accepts a `sellerEmail` for someone who has never used SafePay, and that address
+is the one that most needs to hear — nobody signs up for a payment they were
+never told about. Their copy swaps the dashboard button for a signup link, since
+a protected route would only bounce them to a login they cannot complete.
+
+[`escrowNotifier.js`](backend/src/services/escrowNotifier.js) sits between the
+engine and the mailer: it resolves who the two parties are and queues the mail
+through `sendInBackground`, never awaited. An escrow transition is a financial
+state change that has already happened by the time mail is attempted — it must
+not be able to fail, or even slow down, because a mail API is having a bad
+minute. This is the human-facing twin of
+[`webhookDispatcher.js`](backend/src/services/webhookDispatcher.js), which tells
+*machines* about the same moments; `cancelled` and `claimed` are email-only,
+because neither was ever in the published webhook event list and adding a topic
+partners have not subscribed to is a breaking change dressed up as a feature.
 
 **Email verification is compulsory, and enforced by absence rather than by a
 prompt.** `POST /v1/auth/signup` answers `202` and issues *no session token*; the
@@ -518,7 +561,7 @@ slow mail provider cannot slow down a login.
 `npm --prefix backend run test:auth` asserts all of that — 40 checks, most of them
 asserting that something is *impossible*.
 
-**With no `RESEND_API_KEY` the mailer prints codes to the server log** instead of
+**With no `KEPLARS_API_KEY` the mailer prints codes to the server log** instead of
 sending, so a credential-less clone can still complete a signup. Never run a
 production deploy that way: the log then contains live codes. `/health` reports
 `email.configured` so you can tell at a glance.
@@ -526,7 +569,7 @@ production deploy that way: the log then contains live codes. `/health` reports
 ### Before real money
 
 Set a real `JWT_SECRET`, publish [`firestore.rules`](firestore.rules), verify a
-sending domain in Resend, and connect settlement to Wema virtual accounts in place
+sending domain in Keplars, and connect settlement to Wema virtual accounts in place
 of the simulated ledger.
 
 ---

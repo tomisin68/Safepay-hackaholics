@@ -1,5 +1,5 @@
 /**
- * Transactional email, via Resend.
+ * Transactional email, via Keplars.
  *
  * Three messages matter to security, so all three live here rather than being
  * scattered through the routes that trigger them:
@@ -10,27 +10,45 @@
  *
  * Delivery is never allowed to fail a request. `send()` swallows transport
  * errors and reports them in its return value; callers decide whether that is
- * interesting. A signup must not 500 because Resend had a bad minute — and,
- * more importantly, a login must not hang waiting on an alert email.
+ * interesting. A signup must not 500 because the mail API had a bad minute —
+ * and, more importantly, a login must not hang waiting on an alert email.
  *
- * With no RESEND_API_KEY the mailer runs in console mode: the message is logged
+ * Keplars splits sending by priority rather than by plan, so each message asks
+ * for the tier it actually needs: `instant` (0-5s) for the OTP, because a code
+ * that lands after the user gives up is the same as no code at all; `high` for
+ * the sign-in alert; `async` for the welcome, which nobody is waiting on.
+ *
+ * With no KEPLARS_API_KEY the mailer runs in console mode: the message is logged
  * instead of sent, so a clean clone can still complete the OTP flow. That
  * fallback prints the code, so it only ever runs when mail is genuinely
  * unconfigured — in which case there is no other way to sign up.
  */
 
-import { Resend } from 'resend';
+import { formatNaira } from '../lib/money.js';
 
-const API_KEY = process.env.RESEND_API_KEY?.trim() || '';
+const API_KEY = process.env.KEPLARS_API_KEY?.trim() || '';
+const BASE_URL = (process.env.KEPLARS_BASE_URL?.trim() || 'https://api.keplars.com').replace(/\/$/, '');
+
+/** A slow mail call must not become a slow signup. Hard ceiling, no retries. */
+const TIMEOUT_MS = 12_000;
 
 /**
- * Resend will only deliver from a domain you have verified. Until then
- * `onboarding@resend.dev` works, with one catch worth knowing before demo day:
- * it can only send to the address that owns the Resend account. Verify a domain
- * and set MAIL_FROM to reach anyone else.
+ * MAIL_FROM is optional, and leaving it unset is the safer default: omit `from`
+ * and Keplars sends as whatever mailbox the workspace has connected. Setting it
+ * only helps once you have more than one verified sender to choose between, and
+ * an address Keplars does not recognise is rejected rather than substituted.
+ *
+ * The `Name <addr>` form is accepted and unwrapped — Keplars wants a bare
+ * address, so a MAIL_FROM carried over from another provider keeps working.
  */
-const FROM = process.env.MAIL_FROM?.trim() || 'SafePay <onboarding@resend.dev>';
-const REPLY_TO = process.env.MAIL_REPLY_TO?.trim() || undefined;
+function bareAddress(value) {
+  const raw = String(value ?? '').trim();
+  const angled = /<([^>]+)>/.exec(raw);
+  return (angled ? angled[1] : raw).trim();
+}
+
+const FROM = bareAddress(process.env.MAIL_FROM);
+const REPLY_TO = bareAddress(process.env.MAIL_REPLY_TO) || undefined;
 
 /** Used in email links. Falls back to the first allowed browser origin. */
 const APP_URL = (process.env.APP_URL || process.env.WEB_ORIGIN || '')
@@ -40,7 +58,11 @@ const APP_URL = (process.env.APP_URL || process.env.WEB_ORIGIN || '')
 
 export const mailerReady = Boolean(API_KEY);
 
-const resend = API_KEY ? new Resend(API_KEY) : null;
+/* A mistyped key is otherwise only discoverable by watching a signup fail, and
+ * the shape is distinctive enough to check for free at boot. */
+if (API_KEY && !/^kms_[a-f0-9]+\.(live|adm)_[a-f0-9]+$/.test(API_KEY)) {
+  console.warn('[mail] KEPLARS_API_KEY does not look like a Keplars key (kms_<id>.live_<secret>) — sends will be rejected');
+}
 
 /* ------------------------------------------------------------------ *
  * Templates
@@ -108,35 +130,71 @@ function button(href, label) {
  * ------------------------------------------------------------------ */
 
 /**
- * @returns {Promise<{ ok: boolean, id?: string, error?: string, mode: 'resend'|'console' }>}
+ * One POST to Keplars. The endpoint carries the priority; the body is the same
+ * either way.
+ *
+ * Keplars takes a single content field — `body` plus `is_html` — rather than an
+ * html/text pair, so the HTML part is what goes out and the plain-text version
+ * is kept only for the console fallback below.
+ *
+ * @param {'instant'|'high'|'async'} priority
+ * @returns {Promise<{ ok: boolean, id?: string, error?: string, mode: 'keplars'|'console' }>}
  *          Never rejects.
  */
-async function send({ to, subject, html, text, tags }) {
-  if (!resend) {
-    console.warn(`[mail] RESEND_API_KEY unset — not sending "${subject}" to ${to}`);
+async function send({ to, subject, html, text, priority = 'async' }) {
+  if (!mailerReady) {
+    console.warn(`[mail] KEPLARS_API_KEY unset — not sending "${subject}" to ${to}`);
+    // The plain-text part is the whole message in console mode: without a
+    // mailbox to read, the log is the only place its contents can go.
+    if (text) console.warn(`[mail]   ${text.replace(/\s+/g, ' ')}`);
     return { ok: false, error: 'mailer_unconfigured', mode: 'console' };
   }
 
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
   try {
-    const { data, error } = await resend.emails.send({
-      from: FROM,
-      to: [to],
-      subject,
-      html,
-      text,
-      ...(REPLY_TO ? { replyTo: REPLY_TO } : {}),
-      ...(tags ? { tags } : {}),
+    const res = await fetch(`${BASE_URL}/api/v1/send-email/${priority}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: [to],
+        subject,
+        body: html,
+        is_html: true,
+        // Omitted unless configured, so Keplars falls back to the sender the
+        // workspace has connected rather than being handed one it may reject.
+        ...(FROM ? { from: FROM } : {}),
+        ...(REPLY_TO ? { reply_to: REPLY_TO } : {}),
+      }),
+      signal: controller.signal,
     });
 
-    if (error) {
-      // Resend reports rejections in-band rather than by throwing.
-      console.error(`[mail] rejected "${subject}" -> ${to}:`, error.message || error.name || error);
-      return { ok: false, error: error.message || 'send_rejected', mode: 'resend' };
+    const payload = await res.json().catch(() => ({}));
+
+    /* Rejections come back in two different shapes depending on where they are
+     * caught — `{ error: { type, message } }` from validation, `{ success:
+     * false, message }` from auth — so both are unwrapped before falling back
+     * to the status line. */
+    if (!res.ok || payload?.success === false) {
+      const reason = payload?.error?.message || payload?.message
+        || (typeof payload?.error === 'string' ? payload.error : '')
+        || `HTTP ${res.status}`;
+      console.error(`[mail] rejected "${subject}" -> ${to}: ${reason}`);
+      return { ok: false, error: String(reason), mode: 'keplars' };
     }
-    return { ok: true, id: data?.id, mode: 'resend' };
+
+    // A queued send answers flat: { id, object, status, metadata }.
+    return { ok: true, id: payload?.id || payload?.data?.id, mode: 'keplars' };
   } catch (err) {
-    console.error(`[mail] transport error for "${subject}" -> ${to}:`, err.message);
-    return { ok: false, error: err.message, mode: 'resend' };
+    const reason = err.name === 'AbortError' ? `timed out after ${TIMEOUT_MS}ms` : err.message;
+    console.error(`[mail] transport error for "${subject}" -> ${to}: ${reason}`);
+    return { ok: false, error: reason, mode: 'keplars' };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -173,7 +231,8 @@ export async function sendOtpEmail({ to, name, code, minutes }) {
     subject: `${code} is your SafePay verification code`,
     html,
     text,
-    tags: [{ name: 'category', value: 'otp' }],
+    // The one message a user is actively waiting on. 0-5s tier.
+    priority: 'instant',
   });
 
   /* Console fallback. Without it an unconfigured deploy has no path through the
@@ -222,7 +281,7 @@ export async function sendLoginAlertEmail({ to, name, ip, userAgent, at }) {
     subject: 'New sign-in to your SafePay account',
     html,
     text,
-    tags: [{ name: 'category', value: 'login_alert' }],
+    priority: 'high',
   });
 }
 
@@ -255,8 +314,257 @@ export async function sendWelcomeEmail({ to, name }) {
     subject: 'Welcome to SafePay — your email is confirmed',
     html,
     text,
-    tags: [{ name: 'category', value: 'welcome' }],
+    priority: 'async',
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Escrow lifecycle
+ * ------------------------------------------------------------------ */
+
+/**
+ * Every escrow email is the same shape — heading, one line of what happened, a
+ * summary table, one line of what to do about it — so the only thing that
+ * varies per event is the copy. Keeping it in one table rather than one
+ * function per event means the buyer's and the seller's version of the same
+ * moment sit on adjacent lines, which is the only way to keep them consistent.
+ *
+ * The two sides genuinely need different words: "your payment is held" and
+ * "you can start work" describe the same funding event, and sending either
+ * party the other's version is worse than sending nothing.
+ *
+ * @type {Record<string, Record<'buyer'|'seller', (ctx) => { subject: string, heading: string, intro: string, next?: string }>>}
+ */
+const ESCROW_COPY = {
+  created: {
+    buyer: (c) => ({
+      subject: `Escrow opened: ${c.title}`,
+      heading: 'Your escrow is open',
+      intro: `You opened an escrow with ${c.other} for ${c.amount}.`,
+      next: 'Nothing has left your account yet. Fund it when you are ready and SafePay holds the money until you confirm delivery.',
+    }),
+    seller: (c) => ({
+      subject: `${c.other} opened an escrow with you: ${c.title}`,
+      heading: 'You have been added to an escrow',
+      intro: `${c.other} opened a SafePay escrow for ${c.amount}.`,
+      next: c.invited
+        ? 'Create a SafePay account with this email address to accept it. Once the buyer funds the escrow the money sits with SafePay, not with them.'
+        : 'Once the buyer funds it the money sits with SafePay, not with them, and is released to you when they confirm delivery.',
+    }),
+  },
+
+  /* The in-person handshake. The seller opened this escrow and has been staring
+   * at a QR code; the buyer has just scanned it. Neither of them opened an
+   * escrow "with" a stranger, so `created` cannot describe this and does not
+   * try — see notifyEscrow. */
+  claimed: {
+    buyer: (c) => ({
+      subject: `You joined ${c.other}'s escrow: ${c.title}`,
+      heading: 'You are on this escrow',
+      intro: `You claimed ${c.other}'s escrow for ${c.amount}.`,
+      next: 'Fund it and SafePay holds the money until you confirm you have what you paid for.',
+    }),
+    seller: (c) => ({
+      subject: `${c.other} claimed ${c.title}`,
+      heading: 'Your code was claimed',
+      intro: `${c.other} scanned your code and joined the escrow for ${c.amount}.`,
+      next: 'Wait for them to fund it before handing anything over. You will get an email the moment they do.',
+    }),
+  },
+
+  funded: {
+    buyer: (c) => ({
+      subject: `You funded ${c.title}`,
+      heading: 'Your payment is held in escrow',
+      intro: `${c.amount} is now held by SafePay for ${c.title}.`,
+      next: c.autoRelease
+        ? `Release it once you are happy with what you received. If you do nothing it releases automatically on ${c.autoRelease}.`
+        : 'Release it once you are happy with what you received.',
+    }),
+    seller: (c) => ({
+      subject: `${c.other} funded ${c.title}`,
+      heading: 'The buyer has funded this escrow',
+      intro: `${c.amount} is held by SafePay and is yours once the buyer confirms delivery.`,
+      next: 'It is safe to start. The money is already out of the buyer’s hands.',
+    }),
+  },
+
+  delivered: {
+    buyer: (c) => ({
+      subject: `${c.other} marked ${c.title} as delivered`,
+      heading: 'The seller says this is delivered',
+      intro: `${c.other} has marked ${c.title} as delivered.`,
+      next: c.autoRelease
+        ? `Check it over, then release the funds. If nothing happens by ${c.autoRelease} they release automatically.`
+        : 'Check it over, then release the funds. Open a dispute instead if something is wrong.',
+    }),
+    seller: (c) => ({
+      subject: `You marked ${c.title} as delivered`,
+      heading: 'Delivery recorded',
+      intro: `You marked ${c.title} as delivered and the buyer has been told.`,
+      next: 'The funds release when they confirm, or automatically if they go quiet.',
+    }),
+  },
+
+  released: {
+    buyer: (c) => ({
+      subject: `Funds released for ${c.title}`,
+      heading: 'This escrow is complete',
+      intro: `${c.amount} has been released to ${c.other}.`,
+      next: 'It counts toward both SafeScores, so the next escrow either of you opens starts from a stronger position.',
+    }),
+    seller: (c) => ({
+      subject: `You have been paid for ${c.title}`,
+      heading: 'The funds are yours',
+      intro: `${c.net} is on its way to you${c.fee ? `, after the ${c.fee} SafePay fee` : ''}.`,
+      next: 'A settled escrow is the single biggest input to your SafeScore.',
+    }),
+  },
+
+  milestone: {
+    buyer: (c) => ({
+      subject: `Milestone approved: ${c.milestone}`,
+      heading: 'You approved a milestone',
+      intro: `${c.milestoneAmount} has been released to ${c.other} for "${c.milestone}".`,
+      next: c.progress ? `${c.progress} on this escrow. The rest stays in escrow.` : 'The rest stays in escrow.',
+    }),
+    seller: (c) => ({
+      subject: `Milestone paid: ${c.milestone}`,
+      heading: 'A milestone has been released',
+      intro: `${c.other} approved "${c.milestone}" and ${c.milestoneAmount} has been released to you.`,
+      next: c.progress ? `${c.progress} on this escrow.` : 'The remaining milestones stay in escrow until approved.',
+    }),
+  },
+
+  disputed: {
+    buyer: (c) => ({
+      subject: `A dispute was opened on ${c.title}`,
+      heading: 'This escrow is in dispute',
+      intro: `${c.amount} stays in escrow while this is reviewed.`,
+      next: 'Nothing moves until it is resolved. Add anything that supports your side in the dashboard.',
+    }),
+    seller: (c) => ({
+      subject: `A dispute was opened on ${c.title}`,
+      heading: 'This escrow is in dispute',
+      intro: `${c.amount} stays in escrow while this is reviewed.`,
+      next: 'Nothing moves until it is resolved. Add anything that supports your side in the dashboard.',
+    }),
+  },
+
+  refunded: {
+    buyer: (c) => ({
+      subject: `Refunded: ${c.title}`,
+      heading: 'Your money is coming back',
+      intro: `${c.refunded} is being returned to you for ${c.title}.`,
+      next: 'This escrow is now closed.',
+    }),
+    seller: (c) => ({
+      subject: `${c.title} was refunded to the buyer`,
+      heading: 'This escrow was refunded',
+      intro: `${c.refunded} has been returned to ${c.other}.`,
+      next: 'No funds were released and the escrow is now closed.',
+    }),
+  },
+
+  cancelled: {
+    buyer: (c) => ({
+      subject: `Escrow cancelled: ${c.title}`,
+      heading: 'This escrow was cancelled',
+      intro: `${c.title} was cancelled before it was funded.`,
+      next: 'No money moved.',
+    }),
+    seller: (c) => ({
+      subject: `Escrow cancelled: ${c.title}`,
+      heading: 'This escrow was cancelled',
+      intro: `${c.title} was cancelled before it was funded.`,
+      next: 'No money moved.',
+    }),
+  },
+};
+
+/** Readable in an email, unambiguous across time zones. */
+function emailDate(value) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toUTCString().replace(/ GMT$/, ' UTC');
+}
+
+/**
+ * One escrow update, written from one party's side.
+ *
+ * `role` is whose inbox this is landing in, not who caused the event — the
+ * caller works that out, because only it knows which of the two addresses it
+ * is currently sending to.
+ *
+ * Unknown events return without sending rather than mailing a blank template:
+ * a new state in the engine should be silent until someone writes its copy,
+ * not noisy and wrong.
+ *
+ * @param {object}  arg
+ * @param {'buyer'|'seller'} arg.role  the recipient's side of the escrow
+ * @param {boolean} [arg.invited]      recipient has no account yet
+ */
+export async function sendEscrowEmail({ to, name, role, event, escrow, otherName, invited, milestone }) {
+  const copyFor = ESCROW_COPY[event]?.[role];
+  if (!copyFor) return { ok: false, error: `no_copy_for_${event}_${role}`, mode: 'console' };
+
+  const first = String(name || '').trim().split(/\s+/)[0] || 'there';
+  const fee = escrow.feeKobo ? formatNaira(escrow.feeKobo) : '';
+  const net = formatNaira(escrow.netToSellerKobo ?? escrow.amountKobo - (escrow.feeKobo ?? 0));
+
+  const approved = (escrow.milestones ?? []).filter((m) => m.status === 'approved').length;
+  const total = (escrow.milestones ?? []).length;
+
+  const { subject, heading, intro, next } = copyFor({
+    title: escrow.title,
+    amount: formatNaira(escrow.amountKobo),
+    refunded: formatNaira(escrow.refundedKobo ?? escrow.amountKobo),
+    net,
+    fee,
+    other: otherName || 'the other party',
+    invited: Boolean(invited),
+    autoRelease: emailDate(escrow.autoReleaseAt),
+    milestone: milestone?.title ?? '',
+    milestoneAmount: milestone ? formatNaira(milestone.amountKobo) : '',
+    progress: total ? `${approved} of ${total} milestones approved` : '',
+  });
+
+  const row = (label, value) => (value ? `
+    <tr>
+      <td style="padding:7px 0;font-size:13px;color:#8A8390;width:110px;vertical-align:top;">${escapeHtml(label)}</td>
+      <td style="padding:7px 0;font-size:13px;color:${INK};word-break:break-word;">${escapeHtml(value)}</td>
+    </tr>` : '');
+
+  /* An invited seller has no dashboard to open yet, so the button has to send
+   * them somewhere that works — signup, with the escrow waiting once they are
+   * through it. Sending them to a protected route would bounce them to a login
+   * they cannot complete. */
+  const cta = invited
+    ? { href: APP_URL ? `${APP_URL}/signup` : '', label: 'Create my SafePay account' }
+    : { href: APP_URL ? `${APP_URL}/app/escrow/${escrow.id}` : '', label: 'Open this escrow' };
+
+  const html = layout({
+    heading,
+    intro: `Hi ${escapeHtml(first)} — ${escapeHtml(intro)}`,
+    body: `
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${LINE};border-radius:12px;padding:6px 16px;">
+        ${row('Escrow', escrow.title)}
+        ${row('Amount', formatNaira(escrow.amountKobo))}
+        ${row('Status', String(escrow.status ?? '').replace(/_/g, ' '))}
+        ${row('Reference', escrow.id)}
+      </table>
+      ${next ? `<p style="margin:18px 0 0;font-size:13px;line-height:1.6;color:${MUTED};">${escapeHtml(next)}</p>` : ''}
+      ${button(cta.href, cta.label)}`,
+    footnote: 'You are receiving this because you are a party to this SafePay escrow.',
+  });
+
+  const text = `${heading}. ${intro}${next ? ` ${next}` : ''} Escrow ${escrow.id} (${escrow.title}), ${formatNaira(escrow.amountKobo)}, status ${escrow.status}.`;
+
+  /* `high` rather than `instant`: nobody is sitting on a form waiting for this
+   * the way they wait for an OTP, but "your money moved" should not sit in a
+   * five-minute queue either. */
+  return send({ to, subject, html, text, priority: 'high' });
 }
 
 /**

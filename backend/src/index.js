@@ -73,7 +73,7 @@ app.get('/health', (_req, res) => {
     version: '1.0.0',
     store: storeHealth(),
     firebase: firebaseReady ? { connected: true, projectId } : { connected: false },
-    email: { provider: 'resend', configured: mailerReady },
+    email: { provider: 'keplars', configured: mailerReady },
     time: new Date().toISOString(),
   });
 });
@@ -205,7 +205,7 @@ const server = app.listen(PORT, () => {
   console.log(`  Docs         ->  http://localhost:${PORT}/docs`);
   console.log(`  Store        ->  ${storeBackend === 'firestore' ? `Firestore (${projectId})` : 'local JSON file'}`);
   console.log(`  Auth         ->  ${firebaseReady ? 'Firebase Auth mirror active' : 'local only (no Firebase creds)'}`);
-  console.log(`  Email        ->  ${mailerReady ? 'Resend' : 'NOT CONFIGURED - codes print to this log'}`);
+  console.log(`  Email        ->  ${mailerReady ? 'Keplars' : 'NOT CONFIGURED - codes print to this log'}`);
   console.log(`  AI triage    ->  ${process.env.GEMINI_API_KEY ? 'Gemini' : 'rule-based fallback'}\n`);
   sweepAutoReleases();
 });
