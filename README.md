@@ -273,6 +273,14 @@ The repo ships a blueprint. **New → Blueprint → pick this repo**, and
 [`render.yaml`](render.yaml) provisions the service, mounts a 1 GB disk at
 `/var/data`, and generates `JWT_SECRET` for you.
 
+> Create the service **from the blueprint**, not with New → Web Service.
+> A manually-created service ignores `render.yaml` entirely, so its Root
+> Directory stays at the repo root — where `npm start` does not exist, because
+> that script lives in [`backend/package.json`](backend/package.json). The
+> deploy then fails with `Missing script: "start"` followed by a port-scan
+> timeout. If you already made one by hand, set **Root Directory** to
+> `backend` and add the disk and variables below yourself.
+
 Then set one variable by hand once the frontend is live:
 
 ```
@@ -282,11 +290,24 @@ WEB_ORIGIN = https://<your-app>.vercel.app
 Optionally add `GEMINI_API_KEY` — without it, dispute triage uses the
 rule-based classifier and still works.
 
-Seed the demo data from the Render shell:
+Seed the demo data. On a paid instance, from the Render shell:
 
 ```bash
 npm run seed
 ```
+
+The free plan has no shell, so set this environment variable instead and
+redeploy — the API loads the demo dataset the first time it boots against an
+empty database:
+
+```
+SEED_ON_EMPTY = true
+```
+
+It is guarded twice: opt-in via the environment, and even then it only runs
+when there are zero users. It can populate an empty deploy but never overwrite
+real data, however often the service restarts. If the host has no persistent
+disk and the store resets, the next boot simply re-seeds.
 
 > The free plan sleeps when idle, so the first request after a nap takes ~30s.
 > Wake it before a live demo.

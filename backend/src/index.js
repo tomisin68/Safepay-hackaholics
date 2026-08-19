@@ -14,7 +14,7 @@ import adminRoutes from './routes/admin.js';
 
 import { ApiError } from './lib/errors.js';
 import { sweepAutoReleases } from './services/escrowEngine.js';
-import { flushNow } from './store/index.js';
+import { flushNow, users } from './store/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -127,6 +127,25 @@ app.use((err, _req, res, _next) => {
   console.error('[unhandled]', err);
   res.status(500).json({ error: { code: 'server_error', message: 'Something went wrong on our side.' } });
 });
+
+/* ------------------------------ first boot -------------------------------
+ * Hosts without shell access (Render's free plan, for one) give you no way to
+ * run `npm run seed`, so a fresh deploy would come up with an empty database
+ * and every demo account bouncing off the login screen. With SEED_ON_EMPTY set,
+ * the API seeds itself the first time it finds no users.
+ *
+ * Guarded twice on purpose. It is opt-in via the environment, and even then it
+ * only runs against a database with zero users — so it can populate an empty
+ * deploy but can never overwrite real data, however many times the service
+ * restarts. If the host has no persistent disk and the store resets, the next
+ * boot simply re-seeds.
+ * ------------------------------------------------------------------------ */
+if (process.env.SEED_ON_EMPTY === 'true' && users.count() === 0) {
+  console.log('  Empty database and SEED_ON_EMPTY=true — loading demo data...');
+  // Importing runs the seed script; it is a top-level program, not a module of
+  // helpers. Failure here must not stop the API from serving.
+  await import('./seed.js').catch((err) => console.error('[seed] failed:', err.message));
+}
 
 /* --------------------------- background workers -------------------------- */
 const sweeper = setInterval(sweepAutoReleases, 60_000);

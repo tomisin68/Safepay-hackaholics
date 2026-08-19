@@ -49,6 +49,12 @@ services:
       - key: GEMINI_API_KEY
         sync: false
 
+      # Render's free plan has no shell, so `npm run seed` cannot be run by
+      # hand. This loads the demo data on first boot instead. It fires only
+      # when the database has zero users, so restarts never clobber real data.
+      - key: SEED_ON_EMPTY
+        value: "true"
+
       - key: PLATFORM_FEE_BPS
         value: "150"
 
