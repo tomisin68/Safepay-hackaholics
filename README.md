@@ -306,6 +306,51 @@ VITE_API_URL = https://safepay-api.onrender.com
 
 It is read at build time, so redeploy after changing it.
 
+> **If you skip this variable, the build does not break — it switches to demo
+> mode.** See below. That is deliberate: a static host answers `POST /v1/auth/login`
+> with a 405, so an unconfigured deployment would otherwise be a site where no
+> account can sign in.
+
+### 3. Demo mode — the deployed link works with no backend
+
+A production build with no `VITE_API_URL` serves the entire app from a seeded
+database in the visitor's own browser
+([`frontend/src/lib/demo/`](frontend/src/lib/demo/)). The demo accounts sign in,
+escrows fund, deliver and release, disputes get triaged, SafeScore recomputes,
+and the admin console fills up — with nothing deployed and nothing sent anywhere.
+State persists in `localStorage`, so a reload does not undo a demo.
+
+The escrow state machine, SafeScore weights and dispute classifier are ported
+from `backend/src/services/`, so the numbers match what the real API returns —
+the seeded scores come out at Ada 57, Tunde 68, Amara 30, Kelechi 5, exactly as
+the table above says.
+
+Control it explicitly with `VITE_DEMO_MODE`:
+
+| Value | Behaviour |
+|---|---|
+| *(unset)* | On for a production build with no `VITE_API_URL`; off otherwise |
+| `true` | Always on — useful for previewing the demo locally |
+| `false` | Always off, so a backend outage surfaces as an error instead of fake data |
+
+**Set `VITE_DEMO_MODE=false` once the API is live**, so an outage is visible
+rather than silently papered over.
+
+### 4. Firebase
+
+[`frontend/src/lib/firebase.js`](frontend/src/lib/firebase.js) initialises the
+web SDK for project `safepay-6227f` and loads Analytics lazily, after first
+paint, guarded by `isSupported()` — `getAnalytics()` throws in browsers without
+cookies or IndexedDB, and a measurement pixel must never be able to blank a
+payments app.
+
+The web config is not a secret: Firebase ships it in every client bundle and
+enforces access through Security Rules. It is still read from
+`VITE_FIREBASE_*` variables (see [`frontend/.env.example`](frontend/.env.example))
+so a fork can point at its own project without editing source. Leave
+`VITE_FIREBASE_MEASUREMENT_ID` empty to switch Analytics off entirely.
+
+
 ### Before real money
 
 Set a real `JWT_SECRET`, swap `backend/src/store/index.js` for a `firebase-admin`
@@ -322,7 +367,8 @@ Wema virtual accounts in place of the simulated ledger.
 - [x] Backend runs with zero configuration
 - [x] OpenAPI reference served at `/docs`
 - [x] Demo data and accounts seeded
-- [ ] Frontend deployed — *add URL*
+- [x] Frontend deployed — https://safepay-hackaholics-nu.vercel.app
+- [x] Deployed link usable with no backend (demo mode)
 - [ ] Backend deployed — *add URL*
 - [ ] Loom demo recorded — *add link*
 

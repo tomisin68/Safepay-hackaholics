@@ -77,8 +77,17 @@ export const Button = forwardRef(function Button(
     return <Link ref={ref} to={to} className={classes} {...rest}>{content}</Link>;
   }
   if (href && !isDisabled) {
+    // Only genuinely external destinations get a new tab. A same-page anchor
+    // like "#how" opening a second tab is a bug, not a courtesy.
+    const external = /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//');
     return (
-      <a ref={ref} href={href} className={classes} target="_blank" rel="noreferrer noopener" {...rest}>
+      <a
+        ref={ref}
+        href={href}
+        className={classes}
+        {...(external ? { target: '_blank', rel: 'noreferrer noopener' } : {})}
+        {...rest}
+      >
         {content}
       </a>
     );

@@ -125,7 +125,10 @@ export function EscrowCard({ escrow, viewerId }) {
       </span>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+        {/* min-w-0 here too: `truncate` implies white-space:nowrap, so without
+            it this row's minimum is the full untruncated title and the card
+            refuses to fit a phone. */}
+        <div className="flex min-w-0 items-center gap-2">
           <p className="truncate text-[0.94rem] font-semibold text-ink">{escrow.title}</p>
           {escrow.flagged && <Pill tone="warn" size="sm" dot={false}>Review</Pill>}
         </div>

@@ -8,6 +8,63 @@
 const BASE = import.meta.env.VITE_API_URL || '';
 const TOKEN_KEY = 'safepay.token';
 
+/**
+ * Demo mode.
+ *
+ * A production build with no `VITE_API_URL` has no API to talk to: every
+ * request would hit the static host and come back as a 405 or an HTML page.
+ * Rather than ship a site where nothing works, that build serves itself from a
+ * seeded in-browser database (see ./demo). Set `VITE_API_URL` and this turns
+ * itself off; `VITE_DEMO_MODE=true|false` overrides the decision either way.
+ *
+ * In dev the Vite proxy forwards /v1 to localhost:4600, so demo mode stays off
+ * unless it is asked for explicitly.
+ */
+const DEMO_FLAG = import.meta.env.VITE_DEMO_MODE;
+export const isDemoMode =
+  DEMO_FLAG === 'true' ? true : DEMO_FLAG === 'false' ? false : !BASE && import.meta.env.PROD;
+
+let demoModule = null;
+const demo = () => (demoModule ??= import('./demo/index.js'));
+
+/** Re-seed the in-browser database. No-op when a real API is configured. */
+export async function resetDemoData() {
+  if (!isDemoMode) return false;
+  const { resetDemo } = await demo();
+  await resetDemo();
+  return true;
+}
+
+async function demoRequest(path, { method, body, auth }) {
+  const [pathname, search = ''] = path.split('?');
+  const query = Object.fromEntries(new URLSearchParams(search));
+  const { handleDemoRequest } = await demo();
+
+  try {
+    const { data } = await handleDemoRequest({
+      method,
+      path: pathname,
+      query,
+      body,
+      token: auth ? getToken() : null,
+    });
+    return data;
+  } catch (err) {
+    const status = err.status ?? 500;
+    if (status === 401 && auth && getToken()) {
+      setToken(null);
+      if (!location.pathname.startsWith('/login')) {
+        location.assign(`/login?next=${encodeURIComponent(location.pathname)}`);
+      }
+    }
+    throw new ApiError(err.message || `Request failed (${status})`, {
+      status,
+      code: err.code,
+      details: err.details,
+    });
+  }
+}
+
 export const getToken = () => localStorage.getItem(TOKEN_KEY);
 export const setToken = (token) => {
   if (token) localStorage.setItem(TOKEN_KEY, token);
@@ -24,6 +81,8 @@ export class ApiError extends Error {
 }
 
 async function request(path, { method = 'GET', body, auth = true, signal } = {}) {
+  if (isDemoMode) return demoRequest(path, { method, body, auth });
+
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 

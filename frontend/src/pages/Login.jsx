@@ -5,6 +5,7 @@ import { useAuth, useToast } from '../context/AppProviders';
 import { Button } from '../components/ui/Button';
 import { Field, Input } from '../components/ui/Form';
 import { Alert } from '../components/ui/Primitives';
+import { isDemoMode } from '../lib/api';
 import { IconArrowRight, IconSpark } from '../components/Icons';
 
 const DEMO_ACCOUNTS = [
@@ -117,6 +118,7 @@ export default function Login() {
         <p className="mt-1.5 text-[0.79rem] leading-relaxed text-muted">
           Judging this build? Tap an account to fill the form — the password is
           <span className="numeric"> password123</span>.
+          {isDemoMode && ' This deployment runs on seeded data in your browser, so no API is needed.'}
         </p>
         <div className="mt-3 flex flex-col gap-1.5">
           {DEMO_ACCOUNTS.map((account) => (
@@ -124,10 +126,12 @@ export default function Login() {
               key={account.email}
               type="button"
               onClick={() => fillDemoAccount(account.email)}
-              className="flex items-center justify-between gap-3 rounded-[9px] border border-brand-line bg-surface px-3 py-2 text-left transition-colors hover:border-brand/50"
+              /* Stacked below sm: side by side, the email wraps mid-address on a
+                 narrow phone and the row loses its shape. */
+              className="flex min-h-[44px] flex-col gap-0.5 rounded-[9px] border border-brand-line bg-surface px-3 py-2 text-left transition-colors hover:border-brand/50 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
             >
               <span className="text-[0.8rem] font-medium text-ink">{account.label}</span>
-              <span className="numeric text-[0.72rem] text-muted">{account.email}</span>
+              <span className="numeric truncate text-[0.72rem] text-muted">{account.email}</span>
             </button>
           ))}
         </div>

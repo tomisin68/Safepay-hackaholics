@@ -284,6 +284,20 @@ button:disabled, [role='button'][aria-disabled='true'] {
    Composite utilities used across the app
    ========================================================================== */
 
+/* Grid and flex items default to `min-width: auto`, which means they refuse to
+   shrink below their content's intrinsic minimum. One long title, one
+   `truncate` (which implies nowrap), one wide table, and the item drags its
+   whole column past the viewport — on a phone that reads as the page scrolling
+   sideways, with no clue which element did it.
+
+   Every layout in this app wants the opposite default. Declared inside
+   `:where()` so it carries zero specificity: any element that genuinely needs
+   an intrinsic minimum still wins with `min-w-fit`, `w-*` or `shrink-0`. */
+:where(.grid) > *,
+:where(.flex) > * {
+  min-width: 0;
+}
+
 .card {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
