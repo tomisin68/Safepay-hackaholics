@@ -64,6 +64,8 @@ tags:
     description: Raising and resolving disputes, with automatic triage.
   - name: SafeScore
     description: Portable trust scores. Public — no authentication required.
+  - name: Intelligence
+    description: AI-assisted risk signals over real SafePay data. Advisory only — it never moves money.
   - name: Developer
     description: Apps, API keys, webhooks and usage logs.
   - name: Admin
@@ -585,6 +587,73 @@ paths:
             image/svg+xml:
               schema: { type: string }
 
+  /v1/intelligence/escrows/{id}/risk:
+    get:
+      tags: [Intelligence]
+      summary: Assess a transaction's risk
+      description: |
+        Computes a risk score and level from deterministic signals over real SafePay
+        data — the seller's completed transactions, dispute rate, verification tier,
+        account age, this amount versus their average, and any open fraud flags. The
+        score and level always come from that rule engine, never from the AI.
+
+        When `GEMINI_API_KEY` is configured, Gemini is given the same signals object
+        (never raw text, never asked to invent facts) and may rewrite `reasons` and
+        `recommendation` into clearer language — it cannot change the score or level.
+        Without a key, or if the call fails or returns something unvalidated, the
+        rule engine's own `reasons`/`recommendation` ship as-is; `source` reports
+        which path produced the result.
+
+        Only the buyer or seller on the escrow may request its assessment — the same
+        rule as `GET /v1/escrows/{id}`.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, example: esc_JbRmBoCmk1JrSKft }
+      responses:
+        "200":
+          description: A structured risk assessment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  risk: { $ref: "#/components/schemas/TransactionRisk" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/intelligence/dispute:
+    post:
+      tags: [Intelligence]
+      summary: Assess a dispute (advisory only)
+      description: |
+        Combines the dispute's auto-triage classification with the underlying
+        transaction's risk assessment into a short human-readable assessment,
+        a confidence figure, key findings, and a recommendation.
+
+        **This endpoint never decides a payout.** `recommendation` is limited to
+        `KEEP_FUNDS_FROZEN` or `ESCALATE_TO_HUMAN_REVIEW` — both leave the money
+        exactly where the dispute already froze it. The actual release/refund
+        decision remains `POST /v1/disputes/{id}/resolve`, made by an admin.
+
+        Reachable by either party to the dispute, or an admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [disputeId]
+              properties:
+                disputeId: { type: string }
+      responses:
+        "200":
+          description: A structured dispute assessment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DisputeRisk" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/developer/apps:
     post:
       tags: [Developer]
@@ -881,6 +950,44 @@ components:
             outcome: { type: string, enum: [release_to_seller, refund_buyer] }
             note: { type: string }
         createdAt: { type: string, format: date-time }
+
+    TransactionRisk:
+      type: object
+      description: |
+        `riskScore` and `riskLevel` always come from SafePay's deterministic rule
+        engine, never from the AI. `reasons` and `recommendation` may be rewritten
+        by Gemini for clarity when configured, but must stay grounded in `signals`.
+      properties:
+        riskLevel: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        riskScore: { type: integer, minimum: 0, maximum: 100, example: 42 }
+        reasons:
+          type: array
+          items: { type: string }
+          example:
+            - "Transaction amount is 6.1x the seller's average transaction size."
+            - "Seller has not completed identity verification."
+        recommendation: { type: string, example: "Request additional verification from the seller." }
+        signals:
+          type: object
+          description: The objective facts the score was computed from — amounts, dispute rates, verification tier, account age, and any open fraud flags.
+        source:
+          type: string
+          description: "`rules` or `gemini:<model>` — which path produced `reasons`/`recommendation`."
+          example: rules
+        assessedAt: { type: string, format: date-time }
+
+    DisputeRisk:
+      type: object
+      description: Advisory only. Never picks a financial outcome — see the endpoint description.
+      properties:
+        assessment: { type: string }
+        confidence: { type: number, minimum: 0, maximum: 1, example: 0.62 }
+        keyFindings:
+          type: array
+          items: { type: string }
+        recommendation: { type: string, enum: [KEEP_FUNDS_FROZEN, ESCALATE_TO_HUMAN_REVIEW] }
+        source: { type: string, example: rules }
+        assessedAt: { type: string, format: date-time }
 
     Score:
       type: object

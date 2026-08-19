@@ -321,6 +321,29 @@ async function route(method, path, query, body, token) {
     }
   }
 
+  /* -------------------------- intelligence -------------------------- */
+  if (area === 'intelligence') {
+    const user = actorFor(token);
+
+    if (method === 'GET' && rest[0] === 'escrows' && rest[2] === 'risk') {
+      const escrow = engine.getOrThrow(rest[1]);
+      engine.assertParty(escrow, user.id);
+      return { status: 200, data: { risk: engine.assessTransactionRisk(escrow) } };
+    }
+
+    if (method === 'POST' && rest[0] === 'dispute') {
+      const disputeId = body?.disputeId;
+      if (!disputeId) throw engine.badRequest('Provide a disputeId.');
+      const dispute = disputes.get(disputeId);
+      if (!dispute) throw engine.notFound('Dispute not found.');
+      const isAdmin = user.role === 'admin';
+      if (!isAdmin && ![dispute.raisedById, dispute.againstId].includes(user.id)) {
+        throw engine.forbidden('You are not party to this dispute.');
+      }
+      return { status: 200, data: engine.assessDisputeRisk(dispute) };
+    }
+  }
+
   /* ----------------------------- score ----------------------------- */
   if (area === 'score') {
     const [userId, sub] = rest;
