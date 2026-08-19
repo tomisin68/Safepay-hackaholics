@@ -197,6 +197,11 @@ export const api = {
     testWebhook: (id) => post(`/v1/developer/apps/${id}/webhooks/test`),
   },
 
+  intelligence: {
+    risk: (escrowId) => get(`/v1/intelligence/escrows/${escrowId}/risk`),
+    dispute: (disputeId) => post('/v1/intelligence/dispute', { disputeId }),
+  },
+
   admin: {
     overview: () => get('/v1/admin/overview'),
     flags: () => get('/v1/admin/flags'),

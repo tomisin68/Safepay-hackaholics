@@ -542,4 +542,188 @@ export function publicView(escrow) {
   };
 }
 
+/* ==========================================================================
+   SafePay Intelligence — deterministic transaction + dispute risk.
+
+   Demo mode never calls an AI provider, so this is the rule engine only —
+   the exact same scoring backend/src/services/intelligence.js runs when
+   GEMINI_API_KEY is unset. Keep the point values and thresholds in step with
+   that file if either moves.
+   ========================================================================== */
+
+function accountAgeDays(user) {
+  if (!user) return null;
+  return Math.floor((Date.now() - new Date(user.createdAt).getTime()) / 864e5);
+}
+
+function transactionStatsFor(userId) {
+  if (!userId) return { completed: 0, settled: 0, avgAmountKobo: 0, disputesAgainst: 0, disputeRatePct: 0 };
+
+  const involved = escrows.find((e) => e.buyerId === userId || e.sellerId === userId);
+  const settled = involved.filter((e) => ['released', 'refunded'].includes(e.status));
+  const completed = involved.filter((e) => e.status === 'released');
+  const avgAmountKobo = completed.length
+    ? Math.round(completed.reduce((s, e) => s + e.amountKobo, 0) / completed.length)
+    : 0;
+  const disputesAgainst = disputes.find((d) => d.againstId === userId).length;
+  const disputeRatePct = settled.length
+    ? Math.round((disputesAgainst / (settled.length + 3)) * 1000) / 10
+    : 0;
+
+  return { completed: completed.length, settled: settled.length, avgAmountKobo, disputesAgainst, disputeRatePct };
+}
+
+export function collectRiskSignals(escrow) {
+  const buyer = escrow.buyerId ? users.get(escrow.buyerId) : null;
+  const seller = escrow.sellerId ? users.get(escrow.sellerId) : null;
+
+  const sellerStats = transactionStatsFor(escrow.sellerId);
+  const buyerStats = transactionStatsFor(escrow.buyerId);
+
+  const amountToAverageRatio = sellerStats.avgAmountKobo > 0
+    ? Math.round((escrow.amountKobo / sellerStats.avgAmountKobo) * 100) / 100
+    : null;
+
+  const recentActivityFlags = fraudFlags
+    .find((f) => f.status === 'open' && [escrow.buyerId, escrow.sellerId].includes(f.userId))
+    .map((f) => f.label);
+
+  return {
+    transaction: { amountKobo: escrow.amountKobo, amountNaira: toNaira(escrow.amountKobo), type: escrow.type, status: escrow.status },
+    seller: seller
+      ? {
+          onSafePay: true,
+          verificationTier: seller.verificationTier ?? 'none',
+          accountAgeDays: accountAgeDays(seller),
+          completedTransactions: sellerStats.completed,
+          settledTransactions: sellerStats.settled,
+          averageTransactionAmountKobo: sellerStats.avgAmountKobo,
+          amountToAverageRatio,
+          disputeCount: sellerStats.disputesAgainst,
+          disputeRatePct: sellerStats.disputeRatePct,
+          safeScore: seller.safeScore ?? 0,
+          scoreTier: seller.scoreTier ?? 'new',
+        }
+      : { onSafePay: false, invitedEmail: escrow.sellerEmail ?? null },
+    buyer: buyer
+      ? {
+          verificationTier: buyer.verificationTier ?? 'none',
+          accountAgeDays: accountAgeDays(buyer),
+          completedTransactions: buyerStats.completed,
+          disputeCount: buyerStats.disputesAgainst,
+          disputeRatePct: buyerStats.disputeRatePct,
+          safeScore: buyer.safeScore ?? 0,
+          scoreTier: buyer.scoreTier ?? 'new',
+        }
+      : null,
+    recentActivityFlags,
+  };
+}
+
+function riskLevelFor(score) {
+  if (score >= 60) return 'HIGH';
+  if (score >= 30) return 'MEDIUM';
+  return 'LOW';
+}
+
+export function assessTransactionRisk(escrow) {
+  const signals = collectRiskSignals(escrow);
+  const { seller, buyer, recentActivityFlags } = signals;
+  let points = 0;
+  const reasons = [];
+
+  if (!seller.onSafePay) {
+    points += 20;
+    reasons.push('Seller has not yet joined SafePay, so there is no transaction history to evaluate.');
+  } else {
+    if (seller.completedTransactions === 0) {
+      points += 15;
+      reasons.push('Seller has no completed transactions on SafePay yet.');
+    } else if (seller.completedTransactions >= 3 && seller.amountToAverageRatio != null) {
+      if (seller.amountToAverageRatio >= 5) {
+        points += 30;
+        reasons.push(`Transaction amount is ${seller.amountToAverageRatio.toFixed(1)}x the seller's average transaction size.`);
+      } else if (seller.amountToAverageRatio >= 2.5) {
+        points += 15;
+        reasons.push(`Transaction amount is notably above the seller's average (${seller.amountToAverageRatio.toFixed(1)}x).`);
+      }
+    }
+
+    if (seller.disputeCount > 0) {
+      if (seller.settledTransactions >= 3 && seller.disputeRatePct >= 20) {
+        points += 25;
+        reasons.push(`Seller has a history of disputes (${seller.disputeRatePct}% of past settled transactions).`);
+      } else {
+        points += 10;
+        reasons.push('Seller has at least one prior dispute on record.');
+      }
+    }
+
+    if (seller.verificationTier === 'none') {
+      points += 10;
+      reasons.push('Seller has not completed identity verification.');
+    }
+
+    if (seller.accountAgeDays != null && seller.accountAgeDays < 3) {
+      points += 10;
+      reasons.push('Seller account was created very recently.');
+    }
+  }
+
+  if (buyer && buyer.disputeCount > 0) {
+    points += 8;
+    reasons.push('Buyer has previously been the subject of a dispute.');
+  }
+
+  if (recentActivityFlags.length > 0) {
+    points += 12;
+    reasons.push('SafePay fraud monitoring has flagged unusual recent activity on this account.');
+  }
+
+  const riskScore = Math.max(0, Math.min(100, points));
+  const riskLevel = riskLevelFor(riskScore);
+  if (reasons.length === 0) reasons.push('No notable risk signals were found for this transaction.');
+
+  const recommendation = riskLevel === 'HIGH'
+    ? 'Request additional verification from the seller, and consider a milestone-based release for extra protection.'
+    : riskLevel === 'MEDIUM'
+      ? 'Consider requesting additional verification or using a milestone-based release.'
+      : 'No additional verification is required based on current signals.';
+
+  return { riskLevel, riskScore, reasons, recommendation, signals, source: 'rules', assessedAt: new Date().toISOString() };
+}
+
+function severityWeight(severity) {
+  return { low: 10, medium: 30, high: 60, critical: 90 }[severity] ?? 30;
+}
+
+export function assessDisputeRisk(dispute) {
+  const escrow = getOrThrow(dispute.escrowId);
+  const txRisk = assessTransactionRisk(escrow);
+
+  const category = (dispute.ai?.category ?? 'other').replace(/_/g, ' ');
+  const severity = dispute.ai?.severity ?? 'medium';
+
+  const keyFindings = [`Dispute auto-classified as "${category}" (${severity} severity).`];
+  if (txRisk.riskLevel !== 'LOW') {
+    keyFindings.push(`The underlying transaction already carried ${txRisk.riskLevel} risk: ${txRisk.reasons[0]}`);
+  }
+  keyFindings.push(...txRisk.reasons.slice(txRisk.riskLevel !== 'LOW' ? 1 : 0));
+
+  const confidence = Math.round(Math.max(0, Math.min(100, (severityWeight(severity) + txRisk.riskScore) / 2))) / 100;
+  const recommendation = ['critical', 'high'].includes(severity) || txRisk.riskLevel === 'HIGH'
+    ? 'ESCALATE_TO_HUMAN_REVIEW'
+    : 'KEEP_FUNDS_FROZEN';
+  const assessment = `This dispute carries ${severity} severity signals and the underlying transaction shows ${txRisk.riskLevel.toLowerCase()} risk. A human reviewer should confirm the outcome — this assessment does not release or refund funds.`;
+
+  return {
+    assessment,
+    confidence,
+    keyFindings: keyFindings.slice(0, 5),
+    recommendation,
+    source: 'rules',
+    assessedAt: new Date().toISOString(),
+  };
+}
+
 export { badRequest, forbidden, notFound, conflict };

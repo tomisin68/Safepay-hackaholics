@@ -103,7 +103,8 @@ async function geminiClassify(text, context) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) return null;
 
-  const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+  // gemini-2.0-flash was retired by Google; gemini-3.6-flash is its replacement.
+  const model = process.env.GEMINI_MODEL || 'gemini-3.6-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
