@@ -7,6 +7,7 @@ import { Card, CardHeader, Alert, Pill, Skeleton, Modal, CopyField, Avatar } fro
 import { Field, Textarea } from '../components/ui/Form';
 import { StatusStepper, MilestoneList } from '../components/Escrow';
 import { TrustChip } from '../components/Trust';
+import { TransactionRiskCard } from '../components/Intelligence';
 import { useAuth, useToast } from '../context/AppProviders';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
@@ -26,6 +27,9 @@ export default function EscrowDetail() {
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
+  const [risk, setRisk] = useState(null);
+  const [riskLoading, setRiskLoading] = useState(true);
+  const [riskError, setRiskError] = useState('');
   const [milestoneBusy, setMilestoneBusy] = useState(null);
   const [confirm, setConfirm] = useState(null);   // 'release' | 'fund' | 'cancel'
   const [disputeOpen, setDisputeOpen] = useState(false);
@@ -42,6 +46,17 @@ export default function EscrowDetail() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRiskLoading(true);
+    setRiskError('');
+    api.intelligence.risk(id)
+      .then((res) => { if (!cancelled) setRisk(res.risk); })
+      .catch((err) => { if (!cancelled) setRiskError(err.message); })
+      .finally(() => { if (!cancelled) setRiskLoading(false); });
+    return () => { cancelled = true; };
+  }, [id]);
 
   const escrow = data?.escrow;
   const ledger = data?.ledger ?? [];
@@ -307,6 +322,8 @@ export default function EscrowDetail() {
               <p className="text-[0.85rem] text-muted">Waiting for the other party to join.</p>
             )}
           </Card>
+
+          <TransactionRiskCard risk={risk} loading={riskLoading} error={riskError} />
 
           {/* in-person QR */}
           {escrow.claimCode && escrow.status === 'created' && (

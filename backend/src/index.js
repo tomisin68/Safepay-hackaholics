@@ -11,6 +11,7 @@ import disputeRoutes from './routes/disputes.js';
 import scoreRoutes from './routes/score.js';
 import developerRoutes from './routes/developer.js';
 import adminRoutes from './routes/admin.js';
+import intelligenceRoutes from './routes/intelligence.js';
 
 import { ApiError } from './lib/errors.js';
 import { sweepAutoReleases } from './services/escrowEngine.js';
@@ -94,6 +95,8 @@ app.get('/', (_req, res) => {
       trustBadge: '/v1/score/:userId/badge.svg',
       developer: '/v1/developer/apps',
       admin: '/v1/admin/overview',
+      intelligenceRisk: '/v1/intelligence/escrows/:id/risk',
+      intelligenceDispute: '/v1/intelligence/dispute',
     },
   });
 });
@@ -104,6 +107,7 @@ app.use('/v1/disputes', disputeRoutes);
 app.use('/v1/score', scoreRoutes);
 app.use('/v1/developer', developerRoutes);
 app.use('/v1/admin', adminRoutes);
+app.use('/v1/intelligence', intelligenceRoutes);
 
 /* ------------------------------- API docs -------------------------------- */
 const SPEC = path.resolve(__dirname, '../../docs/openapi.yaml');
