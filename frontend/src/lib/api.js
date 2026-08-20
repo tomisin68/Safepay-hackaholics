@@ -219,10 +219,21 @@ export const api = {
     dispute: (disputeId) => post('/v1/intelligence/dispute', { disputeId }),
   },
 
+  /** Session-scoped, like wallet — an API key never sees identity documents. */
+  kyc: {
+    get: () => get('/v1/kyc'),
+    submit: (payload) => post('/v1/kyc/submit', payload),
+    document: (docId) => get(`/v1/kyc/document/${docId}`),
+  },
+
   admin: {
     overview: () => get('/v1/admin/overview'),
     flags: () => get('/v1/admin/flags'),
     reviewFlag: (id, action) => post(`/v1/admin/flags/${id}/${action}`),
     users: () => get('/v1/admin/users'),
+    kycQueue: () => get('/v1/admin/kyc'),
+    kycDetail: (userId) => get(`/v1/admin/kyc/${userId}`),
+    kycApprove: (userId) => post(`/v1/admin/kyc/${userId}/approve`),
+    kycReject: (userId, reason) => post(`/v1/admin/kyc/${userId}/reject`, { reason }),
   },
 };

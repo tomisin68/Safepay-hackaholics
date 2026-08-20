@@ -14,6 +14,7 @@ import NewEscrow from './pages/NewEscrow';
 import EscrowDetail from './pages/EscrowDetail';
 import Disputes from './pages/Disputes';
 import TrustProfile from './pages/TrustProfile';
+import Kyc from './pages/Kyc';
 import Developer from './pages/Developer';
 import Admin from './pages/Admin';
 import ClaimCode from './pages/ClaimCode';
@@ -70,6 +71,7 @@ export default function App() {
       <Route path="/app/escrow/:id" element={<Protected><EscrowDetail /></Protected>} />
       <Route path="/app/disputes" element={<Protected><Disputes /></Protected>} />
       <Route path="/app/trust" element={<Protected><TrustProfile /></Protected>} />
+      <Route path="/app/kyc" element={<Protected><Kyc /></Protected>} />
       <Route path="/app/developer" element={<Protected><Developer /></Protected>} />
       <Route path="/app/claim" element={<Protected><ClaimCode /></Protected>} />
       <Route path="/app/admin" element={<Protected adminOnly><Admin /></Protected>} />

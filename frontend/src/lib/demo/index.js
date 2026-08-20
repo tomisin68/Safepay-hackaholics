@@ -44,8 +44,11 @@ export async function resetDemo() {
 
 const publicUser = (user) => {
   if (!user) return null;
-  // Destructured only to drop it — the hash never leaves this module.
-  const { passwordHash: _hash, ...rest } = user;
+  // Destructured only to drop them — the hash and the full KYC submission
+  // never leave this module. See engine.getKycStatus/detailKycForAdmin for
+  // the routes that expose KYC data on purpose, each already masked for its
+  // audience.
+  const { passwordHash: _hash, kyc: _kyc, ...rest } = user;
   return rest;
 };
 
@@ -404,6 +407,23 @@ async function route(method, path, query, body, token) {
     }
   }
 
+  /* ------------------------------- kyc ------------------------------ */
+  if (area === 'kyc') {
+    const user = actorFor(token);
+
+    if (method === 'GET' && rest.length === 0) {
+      return { status: 200, data: { kyc: engine.getKycStatus(user.id) } };
+    }
+
+    if (method === 'POST' && rest[0] === 'submit') {
+      return { status: 201, data: { kyc: engine.submitKyc(user.id, body ?? {}) } };
+    }
+
+    if (method === 'GET' && rest[0] === 'document' && rest[1]) {
+      return { status: 200, data: { document: engine.kycDocument(rest[1], user.id) } };
+    }
+  }
+
   /* ----------------------------- score ----------------------------- */
   if (area === 'score') {
     const [userId, sub] = rest;
@@ -570,9 +590,34 @@ async function route(method, path, query, body, token) {
             ...publicUser(u),
             escrows: escrows.find((e) => e.buyerId === u.id || e.sellerId === u.id).length,
             disputes: disputes.find((d) => d.againstId === u.id).length,
+            kycStatus: u.kyc?.status ?? 'none',
           })),
         },
       };
+    }
+
+    /* ------------------------------- KYC review -------------------------------
+     * Nothing here can mark an account verified on its own — this router only
+     * ever forwards the decision an admin makes. See engine.js's approveKyc/
+     * rejectKyc for the actual state transition.
+     * ---------------------------------------------------------------------------- */
+    if (method === 'GET' && rest[0] === 'kyc' && rest.length === 1) {
+      return { status: 200, data: { submissions: engine.pendingKycForAdmin() } };
+    }
+
+    if (method === 'GET' && rest[0] === 'kyc' && rest[1]) {
+      return { status: 200, data: { submission: engine.detailKycForAdmin(rest[1]) } };
+    }
+
+    if (method === 'POST' && rest[0] === 'kyc' && rest[1] && rest[2] === 'approve') {
+      const admin = requireAdmin(actorFor(token));
+      return { status: 200, data: { kyc: engine.approveKyc(rest[1], admin.id) } };
+    }
+
+    if (method === 'POST' && rest[0] === 'kyc' && rest[1] && rest[2] === 'reject') {
+      const admin = requireAdmin(actorFor(token));
+      if (!body?.reason) throw engine.badRequest('Give a reason the applicant can act on.');
+      return { status: 200, data: { kyc: engine.rejectKyc(rest[1], admin.id, body.reason) } };
     }
   }
 

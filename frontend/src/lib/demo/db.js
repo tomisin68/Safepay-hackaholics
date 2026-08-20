@@ -12,7 +12,7 @@
 
 const KEY = 'safepay.demo.db';
 /* Bump when the seed shape changes so stale saved databases are rebuilt. */
-const VERSION = 4;
+const VERSION = 5;
 
 const EMPTY = {
   version: VERSION,
@@ -27,6 +27,7 @@ const EMPTY = {
   topups: {},
   payouts: {},
   proofs: {},
+  kycDocuments: {},
   meta: { reserveKobo: 0, feesCollectedKobo: 0 },
 };
 
@@ -121,6 +122,7 @@ export const payouts = collection('payouts');
    they do on the server — and because localStorage has a few megabytes total,
    so they must not ride along inside every escrow read. */
 export const proofs = collection('proofs');
+export const kycDocuments = collection('kycDocuments');
 
 /* ------------------------------------------------------------------ *
  * Identifiers and passwords

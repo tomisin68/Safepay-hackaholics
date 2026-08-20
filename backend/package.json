@@ -11,7 +11,8 @@
     "seed": "node src/seed.js",
     "test:e2e": "node test/e2e.mjs",
     "test:auth": "node test/auth.mjs",
-    "test:intelligence": "node test/intelligence.mjs"
+    "test:intelligence": "node test/intelligence.mjs",
+    "test:kyc": "node test/kyc.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

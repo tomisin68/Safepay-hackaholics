@@ -33,7 +33,10 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export function publicUser(user) {
   if (!user) return null;
-  const { passwordHash, ...rest } = user;
+  // Full KYC (ID number, document ids, the mock verifier's notes) has its own
+  // access-controlled routes — GET /v1/kyc for the owner, GET /v1/admin/kyc
+  // for a reviewer. A generic user read must never carry it along.
+  const { passwordHash, kyc, ...rest } = user;
   return rest;
 }
 

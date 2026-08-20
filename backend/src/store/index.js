@@ -59,6 +59,10 @@ const EMPTY = {
   /* Delivery photos, kept out of the escrow document on purpose: a Firestore
    * document is capped at 1 MiB and an escrow is read on every list call. */
   proofs: {},
+  /* KYC identity document photos. Same reasoning as `proofs`, and doubly so
+   * here: this is sensitive material that must never ride along on a generic
+   * user read. */
+  kycDocuments: {},
   meta: { reserveKobo: 0, feesCollectedKobo: 0 },
 };
 
@@ -358,3 +362,4 @@ export const walletEntries = collection('walletEntries');
 export const topups = collection('topups');
 export const payouts = collection('payouts');
 export const proofs = collection('proofs');
+export const kycDocuments = collection('kycDocuments');

@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { escrows, disputes, users, ledger, fraudFlags } from '../store/index.js';
 import { sessionAuth, requireAdmin } from '../middleware/auth.js';
-import { notFound } from '../lib/errors.js';
+import { badRequest, notFound } from '../lib/errors.js';
 import { reserveSummary } from '../services/ledger.js';
 import { openFlags } from '../services/fraud.js';
+import * as kyc from '../services/kyc.js';
 
 const router = Router();
 router.use(sessionAuth, requireAdmin);
@@ -63,9 +64,47 @@ router.get('/users', (_req, res) => {
   res.json({
     users: users
       .all()
-      .map(({ passwordHash, ...u }) => u)
+      // Full KYC (ID number, document ids) has its own reviewed-access routes
+      // below — a bulk user list only ever needs to know the status.
+      .map(({ passwordHash, kyc: fullKyc, ...u }) => ({ ...u, kycStatus: fullKyc?.status ?? 'none' }))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
   });
+});
+
+/* --------------------------------- KYC review -------------------------------
+ * The mock-verified/real-verified line lives entirely in services/kyc.js and
+ * services/kycVerification.js — this router only ever forwards the decision
+ * an admin makes. Nothing here can mark an account verified on its own.
+ * ---------------------------------------------------------------------------- */
+
+router.get('/kyc', (_req, res) => {
+  res.json({ submissions: kyc.pendingForAdmin() });
+});
+
+router.get('/kyc/:userId', (req, res, next) => {
+  try {
+    res.json({ submission: kyc.detailForAdmin(req.params.userId) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/kyc/:userId/approve', (req, res, next) => {
+  try {
+    res.json({ kyc: kyc.approve(req.params.userId, req.user.id) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/kyc/:userId/reject', (req, res, next) => {
+  try {
+    const { reason } = req.body ?? {};
+    if (!reason) throw badRequest('Give a reason the applicant can act on.');
+    res.json({ kyc: kyc.reject(req.params.userId, req.user.id, reason) });
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

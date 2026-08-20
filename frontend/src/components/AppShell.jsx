@@ -7,7 +7,7 @@ import { Avatar, Pill, Toaster } from './ui/Primitives';
 import { Button, IconButton } from './ui/Button';
 import {
   IconHome, IconWallet, IconScale, IconShieldCheck, IconCode, IconChart,
-  IconSun, IconMoon, IconPlus, IconLogout, IconX, IconMenu, IconQr,
+  IconSun, IconMoon, IconPlus, IconLogout, IconX, IconMenu, IconQr, IconIdCard,
 } from './Icons';
 
 const NAV = [
@@ -16,6 +16,7 @@ const NAV = [
   { to: '/app/wallet', label: 'Wallet', icon: IconWallet },
   { to: '/app/disputes', label: 'Disputes', icon: IconScale },
   { to: '/app/trust', label: 'Trust profile', icon: IconChart },
+  { to: '/app/kyc', label: 'Verify identity', icon: IconIdCard },
   { to: '/app/developer', label: 'Developers', icon: IconCode },
 ];
 

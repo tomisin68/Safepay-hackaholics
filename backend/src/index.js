@@ -12,6 +12,7 @@ import scoreRoutes from './routes/score.js';
 import developerRoutes from './routes/developer.js';
 import adminRoutes from './routes/admin.js';
 import intelligenceRoutes from './routes/intelligence.js';
+import kycRoutes from './routes/kyc.js';
 import walletRoutes from './routes/wallet.js';
 
 import { ApiError } from './lib/errors.js';
@@ -99,6 +100,7 @@ app.get('/', (_req, res) => {
       admin: '/v1/admin/overview',
       intelligenceRisk: '/v1/intelligence/escrows/:id/risk',
       intelligenceDispute: '/v1/intelligence/dispute',
+      kyc: '/v1/kyc',
     },
   });
 });
@@ -111,6 +113,7 @@ app.use('/v1/developer', developerRoutes);
 app.use('/v1/admin', adminRoutes);
 app.use('/v1/intelligence', intelligenceRoutes);
 app.use('/v1/wallet', walletRoutes);
+app.use('/v1/kyc', kycRoutes);
 
 /* ------------------------------- API docs -------------------------------- */
 const SPEC = path.resolve(__dirname, '../../docs/openapi.yaml');

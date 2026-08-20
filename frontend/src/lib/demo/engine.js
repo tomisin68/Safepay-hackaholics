@@ -5,7 +5,7 @@
  */
 
 import {
-  escrows, disputes, users, ledger, fraudFlags, meta, proofs,
+  escrows, disputes, users, ledger, fraudFlags, meta, proofs, kycDocuments,
   randomId, claimCode, toNaira, bps,
 } from './db.js';
 import { DemoError, badRequest, forbidden, notFound, conflict } from './errors.js';
@@ -838,6 +838,229 @@ export function assessDisputeRisk(dispute) {
     source: 'rules',
     assessedAt: new Date().toISOString(),
   };
+}
+
+/* ==========================================================================
+   KYC — demo-mode mirror of backend/src/services/kyc.js. Real submission,
+   validation, document storage, and approve/reject lifecycle; the identity
+   check itself is a mock (see ./kycVerification.js) that is advisory only.
+   ========================================================================== */
+import { runMockVerification } from './kycVerification.js';
+
+export const ID_TYPES = ['nin', 'bvn', 'passport', 'drivers_license'];
+const KYC_STATUS_FLOW = { none: ['pending'], pending: ['verified', 'rejected'], rejected: ['pending'], verified: [] };
+const TIER_FOR_ID_TYPE = { nin: 'bvn_nin', bvn: 'bvn_nin', passport: 'bvn_nin', drivers_license: 'bvn_nin' };
+const MAX_DOC_CHARS = 700_000;
+const DOC_CONTENT_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_DOCUMENTS = 2;
+const ID_NUMBER_PATTERNS = {
+  nin: /^\d{11}$/,
+  bvn: /^\d{11}$/,
+  passport: /^[A-Za-z]\d{8}$/,
+  drivers_license: /^[A-Za-z0-9-]{6,20}$/,
+};
+const ID_NUMBER_HINT = {
+  nin: 'A NIN is 11 digits.',
+  bvn: 'A BVN is 11 digits.',
+  passport: 'A Nigerian passport number looks like A12345678.',
+  drivers_license: '6-20 letters, numbers or hyphens.',
+};
+
+function assertKycTransition(from, to) {
+  if (!KYC_STATUS_FLOW[from]?.includes(to)) {
+    throw conflict(`A KYC submission that is "${from}" cannot move to "${to}".`, { from, to });
+  }
+}
+
+function maskIdNumber(idNumber) {
+  const value = String(idNumber ?? '');
+  if (value.length <= 4) return '•'.repeat(value.length);
+  return `${'•'.repeat(value.length - 4)}${value.slice(-4)}`;
+}
+
+function kycSelfView(user) {
+  const kyc = user.kyc;
+  if (!kyc || kyc.status === 'none') return { status: 'none' };
+  return {
+    status: kyc.status,
+    legalName: kyc.legalName,
+    dateOfBirth: kyc.dateOfBirth,
+    idType: kyc.idType,
+    idNumberMasked: maskIdNumber(kyc.idNumber),
+    documentCount: kyc.documentIds?.length ?? 0,
+    submittedAt: kyc.submittedAt,
+    reviewedAt: kyc.reviewedAt ?? null,
+    rejectionReason: kyc.status === 'rejected' ? kyc.rejectionReason ?? null : null,
+  };
+}
+
+function kycAdminView(user) {
+  const kyc = user.kyc;
+  if (!kyc || kyc.status === 'none') return null;
+  return {
+    userId: user.id,
+    name: user.name,
+    email: user.email,
+    status: kyc.status,
+    legalName: kyc.legalName,
+    dateOfBirth: kyc.dateOfBirth,
+    idType: kyc.idType,
+    idNumber: kyc.idNumber,
+    documentIds: kyc.documentIds ?? [],
+    mockVerification: kyc.mockVerification ?? null,
+    submittedAt: kyc.submittedAt,
+    reviewedAt: kyc.reviewedAt ?? null,
+    reviewedBy: kyc.reviewedBy ?? null,
+    rejectionReason: kyc.rejectionReason ?? null,
+    submissionCount: kyc.submissionCount ?? 1,
+  };
+}
+
+export function getKycStatus(userId) {
+  const user = users.get(userId);
+  if (!user) throw notFound('Account not found.');
+  return kycSelfView(user);
+}
+
+function assertKycAdult(dateOfBirth) {
+  const dob = new Date(dateOfBirth);
+  if (Number.isNaN(dob.getTime())) throw badRequest('Enter a valid date of birth.');
+  if (dob.getTime() > Date.now()) throw badRequest('Date of birth cannot be in the future.');
+  const ageYears = (Date.now() - dob.getTime()) / (365.25 * 864e5);
+  if (ageYears < 18) throw badRequest('You must be at least 18 years old to verify your identity.');
+  if (ageYears > 120) throw badRequest('Enter a valid date of birth.');
+}
+
+function storeKycDocument(userId, doc) {
+  const dataUrl = String(doc?.dataUrl ?? '');
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(dataUrl);
+  if (!match) throw badRequest('Upload each document as a photo.');
+
+  const [, contentType, payload] = match;
+  if (!DOC_CONTENT_TYPES.includes(contentType.toLowerCase())) {
+    throw badRequest('Documents must be a JPEG, PNG or WebP image.');
+  }
+  if (payload.length > MAX_DOC_CHARS) throw badRequest('One of your documents is too large. Around 1MB or less, please.');
+
+  const id = randomId('kyd');
+  kycDocuments.set(id, {
+    id,
+    userId,
+    docType: doc?.type ?? 'id_front',
+    contentType,
+    dataUrl,
+    fileName: doc?.fileName ? String(doc.fileName).slice(0, 120) : null,
+    byteSize: Math.floor((payload.length * 3) / 4),
+    createdAt: new Date().toISOString(),
+  });
+  return id;
+}
+
+export function submitKyc(userId, body) {
+  const user = users.get(userId);
+  if (!user) throw notFound('Account not found.');
+
+  assertKycTransition(user.kyc?.status ?? 'none', 'pending');
+
+  const legalName = String(body?.legalName ?? '').trim();
+  if (legalName.length < 2 || legalName.length > 120) {
+    throw badRequest('Enter your full legal name as it appears on your ID.');
+  }
+
+  assertKycAdult(body?.dateOfBirth);
+  const dateOfBirth = new Date(body.dateOfBirth).toISOString().slice(0, 10);
+
+  const idType = String(body?.idType ?? '');
+  if (!ID_TYPES.includes(idType)) throw badRequest(`idType must be one of: ${ID_TYPES.join(', ')}`);
+
+  const idNumber = String(body?.idNumber ?? '').trim().toUpperCase();
+  if (!ID_NUMBER_PATTERNS[idType].test(idNumber)) {
+    throw badRequest(`That does not look like a valid ${idType.replace('_', ' ')} number. ${ID_NUMBER_HINT[idType]}`);
+  }
+
+  const documentsIn = Array.isArray(body?.documents) ? body.documents : [];
+  if (documentsIn.length === 0) throw badRequest('Upload at least one photo of your ID.');
+  if (documentsIn.length > MAX_DOCUMENTS) throw badRequest(`Upload at most ${MAX_DOCUMENTS} documents.`);
+
+  const documentIds = documentsIn.map((doc) => storeKycDocument(userId, doc));
+  const mockVerification = runMockVerification({ legalName, idType, idNumber });
+  const previousAttempts = user.kyc?.submissionCount ?? 0;
+
+  users.update(userId, {
+    kyc: {
+      status: 'pending',
+      legalName,
+      dateOfBirth,
+      idType,
+      idNumber,
+      documentIds,
+      mockVerification,
+      submittedAt: new Date().toISOString(),
+      reviewedAt: null,
+      reviewedBy: null,
+      rejectionReason: null,
+      submissionCount: previousAttempts + 1,
+    },
+  });
+
+  return kycSelfView(users.get(userId));
+}
+
+export function kycDocument(docId, requesterId) {
+  const doc = kycDocuments.get(docId);
+  if (!doc) throw notFound('That document is no longer available.');
+  const requester = users.get(requesterId);
+  if (doc.userId !== requesterId && requester?.role !== 'admin') {
+    throw forbidden('You do not have access to this document.');
+  }
+  return {
+    id: doc.id,
+    docType: doc.docType,
+    dataUrl: doc.dataUrl,
+    contentType: doc.contentType,
+    fileName: doc.fileName,
+    byteSize: doc.byteSize,
+    uploadedAt: doc.createdAt,
+  };
+}
+
+export const pendingKycForAdmin = () =>
+  users.find((u) => u.kyc?.status === 'pending').map(kycAdminView).sort((a, b) => a.submittedAt.localeCompare(b.submittedAt));
+
+export function detailKycForAdmin(userId) {
+  const user = users.get(userId);
+  if (!user) throw notFound('Account not found.');
+  const view = kycAdminView(user);
+  if (!view) throw notFound('This account has no KYC submission.');
+  return view;
+}
+
+export function approveKyc(userId, adminId) {
+  const user = users.get(userId);
+  if (!user) throw notFound('Account not found.');
+  assertKycTransition(user.kyc?.status ?? 'none', 'verified');
+
+  const tier = TIER_FOR_ID_TYPE[user.kyc.idType] ?? 'bvn_nin';
+  users.update(userId, {
+    kyc: { ...user.kyc, status: 'verified', reviewedAt: new Date().toISOString(), reviewedBy: adminId, rejectionReason: null },
+    verificationTier: user.verificationTier === 'address' ? 'address' : tier,
+  });
+  recalculate(userId);
+  return kycSelfView(users.get(userId));
+}
+
+export function rejectKyc(userId, adminId, reason) {
+  const user = users.get(userId);
+  if (!user) throw notFound('Account not found.');
+  assertKycTransition(user.kyc?.status ?? 'none', 'rejected');
+
+  const cleanReason = String(reason ?? '').trim().slice(0, 500);
+  if (cleanReason.length < 5) throw badRequest('Give a reason the applicant can act on.');
+
+  users.update(userId, {
+    kyc: { ...user.kyc, status: 'rejected', reviewedAt: new Date().toISOString(), reviewedBy: adminId, rejectionReason: cleanReason },
+  });
+  return kycSelfView(users.get(userId));
 }
 
 export { badRequest, forbidden, notFound, conflict } from './errors.js';

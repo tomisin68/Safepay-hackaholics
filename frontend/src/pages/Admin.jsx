@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { PageHeader } from '../components/AppShell';
 import { Button } from '../components/ui/Button';
 import { Card, CardHeader, Alert, Pill, Skeleton, EmptyState } from '../components/ui/Primitives';
+import { Textarea } from '../components/ui/Form';
 import { StatTile, VolumeChart } from '../components/Charts';
 import { useToast } from '../context/AppProviders';
 import { api } from '../lib/api';
@@ -9,7 +10,7 @@ import { cn } from '../lib/cn';
 import { formatNaira, formatDateTime, timeAgo } from '../lib/format';
 import {
   IconWallet, IconShieldCheck, IconScale, IconAlertTriangle, IconRefresh,
-  IconUsers, IconCheck, IconX, IconChart,
+  IconUsers, IconCheck, IconX, IconChart, IconIdCard, IconImage,
 } from '../components/Icons';
 
 const SEVERITY_TONE = { low: 'neutral', medium: 'warn', high: 'danger', critical: 'danger' };
@@ -18,12 +19,14 @@ export default function Admin() {
   const toast = useToast();
   const [overview, setOverview] = useState(null);
   const [flags, setFlags] = useState(null);
+  const [kycQueue, setKycQueue] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
 
   const load = useCallback(() => {
     api.admin.overview().then(setOverview).catch((err) => setError(err.message));
     api.admin.flags().then((r) => setFlags(r.flags)).catch(() => {});
+    api.admin.kycQueue().then((r) => setKycQueue(r.submissions)).catch(() => {});
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -154,6 +157,9 @@ export default function Admin() {
             )}
           </Card>
 
+          {/* ---------- KYC review ---------- */}
+          <KycQueueCard submissions={kycQueue} onChanged={load} />
+
           {/* ---------- ledger ---------- */}
           <Card>
             <CardHeader title="Recent ledger entries" description="Append-only, across the whole platform." />
@@ -255,5 +261,155 @@ export default function Admin() {
         </div>
       </div>
     </>
+  );
+}
+
+/* ==========================================================================
+   KYC review queue
+   ========================================================================== */
+const ID_TYPE_LABEL = { nin: 'NIN', bvn: 'BVN', passport: 'Passport', drivers_license: "Driver's license" };
+
+function KycQueueCard({ submissions, onChanged }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState('');
+  const [rejectingId, setRejectingId] = useState(null);
+  const [reason, setReason] = useState('');
+  const [documents, setDocuments] = useState({}); // userId -> [{docId, dataUrl}]
+
+  const approve = async (userId) => {
+    setBusy(userId);
+    try {
+      await api.admin.kycApprove(userId);
+      onChanged();
+      toast.success('Identity verified', "The applicant's trust tier has been updated.");
+    } catch (err) {
+      toast.error('Could not approve', err.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const reject = async (userId) => {
+    if (reason.trim().length < 5) return;
+    setBusy(userId);
+    try {
+      await api.admin.kycReject(userId, reason.trim());
+      setRejectingId(null);
+      setReason('');
+      onChanged();
+      toast.success('Submission rejected', 'The applicant can see the reason and resubmit.');
+    } catch (err) {
+      toast.error('Could not reject', err.message);
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const toggleDocuments = async (submission) => {
+    if (documents[submission.userId]) {
+      setDocuments((d) => ({ ...d, [submission.userId]: undefined }));
+      return;
+    }
+    try {
+      const fetched = await Promise.all(
+        submission.documentIds.map((docId) => api.kyc.document(docId).then((r) => r.document)),
+      );
+      setDocuments((d) => ({ ...d, [submission.userId]: fetched }));
+    } catch (err) {
+      toast.error('Could not load documents', err.message);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader
+        icon={IconIdCard}
+        title="KYC review"
+        description="No identity provider is connected — every submission is decided by an administrator. The mock note is advisory only."
+      />
+      {!submissions ? (
+        <Skeleton className="h-24 rounded-[11px]" />
+      ) : submissions.length === 0 ? (
+        <EmptyState icon={IconShieldCheck} title="Nothing pending" description="No KYC submissions are waiting for review." />
+      ) : (
+        <ul className="flex flex-col gap-2.5">
+          {submissions.map((s) => (
+            <li key={s.userId} className="rounded-[12px] border border-line p-3.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Pill tone="warn" size="sm">{ID_TYPE_LABEL[s.idType] ?? s.idType}</Pill>
+                <span className="text-[0.87rem] font-semibold text-ink">{s.legalName}</span>
+                <span className="text-[0.78rem] text-faint">({s.email})</span>
+                <span className="ml-auto text-[0.72rem] text-faint">{timeAgo(s.submittedAt)}</span>
+              </div>
+
+              <p className="mt-1.5 text-[0.82rem] text-muted">
+                DOB {s.dateOfBirth} · ID number <span className="numeric font-medium text-ink">{s.idNumber}</span>
+                {s.submissionCount > 1 && <span> · attempt #{s.submissionCount}</span>}
+              </p>
+
+              {s.mockVerification && (
+                <p className="mt-1.5 flex items-start gap-1.5 text-[0.78rem] text-muted">
+                  <IconAlertTriangle size={13} className="mt-0.5 shrink-0 text-warn" />
+                  <span>
+                    <span className="font-semibold text-ink">Mock check:</span> {s.mockVerification.reason}
+                  </span>
+                </p>
+              )}
+
+              {documents[s.userId] && (
+                <div className="mt-3 flex gap-2">
+                  {documents[s.userId].map((doc) => (
+                    <img
+                      key={doc.id}
+                      src={doc.dataUrl}
+                      alt={doc.docType}
+                      className="h-20 w-28 rounded-[8px] border border-line object-cover"
+                    />
+                  ))}
+                </div>
+              )}
+
+              {rejectingId === s.userId ? (
+                <div className="mt-3 flex flex-col gap-2">
+                  <Textarea
+                    rows={2}
+                    placeholder="Reason the applicant will see, e.g. photo is too blurry to read the ID number."
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      loading={busy === s.userId}
+                      disabled={reason.trim().length < 5}
+                      onClick={() => reject(s.userId)}
+                    >
+                      Confirm rejection
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => { setRejectingId(null); setReason(''); }}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button size="sm" variant="secondary" icon={IconCheck} loading={busy === s.userId} onClick={() => approve(s.userId)}>
+                    Approve
+                  </Button>
+                  <Button size="sm" variant="ghost" icon={IconX} onClick={() => setRejectingId(s.userId)}>
+                    Reject
+                  </Button>
+                  <Button size="sm" variant="ghost" icon={IconImage} onClick={() => toggleDocuments(s)}>
+                    {documents[s.userId] ? 'Hide documents' : 'View documents'}
+                  </Button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }

@@ -176,6 +176,15 @@ export const IconImage = (p) => (
 export const IconUpload = (p) => (
   <Svg {...p}><path d="M12 16V4.5" /><path d="M7.5 9L12 4.5 16.5 9" /><path d="M4.5 15v3.5A1.5 1.5 0 006 20h12a1.5 1.5 0 001.5-1.5V15" /></Svg>
 );
+export const IconIdCard = (p) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2.2" />
+    <circle cx="8.5" cy="11" r="1.9" />
+    <path d="M5.3 16.2c.5-1.7 1.8-2.6 3.2-2.6s2.7.9 3.2 2.6" />
+    <path d="M14.5 9.5h4" />
+    <path d="M14.5 12.5h4" />
+  </Svg>
+);
 export const IconArrowDown = (p) => (
   <Svg {...p}><path d="M12 4.5v15" /><path d="M6.5 14L12 19.5 17.5 14" /></Svg>
 );
