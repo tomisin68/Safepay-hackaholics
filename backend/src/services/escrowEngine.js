@@ -475,6 +475,31 @@ export function claim(code, userId) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Invited-seller linking
+ *
+ * create() resolves a sellerEmail invite against whoever already has an
+ * account at that moment. Invite someone before they sign up and that
+ * lookup misses — sellerId stays null forever, and GET /v1/escrows (which
+ * matches on id, never on email) can never surface the escrow to them, no
+ * matter what address they register with.
+ *
+ * This is the other half of that resolution: run once an account becomes
+ * real, it backfills sellerId on every escrow still waiting on this
+ * address. Deliberately a pure data fix — no notification or webhook side
+ * effect is fired here, unlike the rest of this file.
+ * ------------------------------------------------------------------ */
+export function linkInvitedEscrows(userId, email) {
+  const normalised = String(email ?? '').toLowerCase().trim();
+  if (!normalised) return [];
+
+  const pending = escrows.find(
+    (e) => e.sellerId === null && e.sellerEmail === normalised && e.buyerId !== userId,
+  );
+
+  return pending.map((e) => escrows.update(e.id, { sellerId: userId }));
+}
+
+/* ------------------------------------------------------------------ *
  * Serialisation
  * ------------------------------------------------------------------ */
 export function publicView(escrow) {

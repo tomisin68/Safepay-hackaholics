@@ -606,6 +606,23 @@ export function claim(code, userId) {
   return touch(escrow, { buyerId: userId }, 'claimed');
 }
 
+/**
+ * Backfills sellerId on every escrow still waiting on this address —
+ * ported from backend/src/services/escrowEngine.js's linkInvitedEscrows.
+ * Demo mode has no OTP gate, so signup itself is the "account becomes real"
+ * moment here, rather than a separate verify-email step.
+ */
+export function linkInvitedEscrows(userId, email) {
+  const normalised = String(email ?? '').toLowerCase().trim();
+  if (!normalised) return [];
+
+  const pending = escrows.find(
+    (e) => e.sellerId === null && e.sellerEmail === normalised && e.buyerId !== userId,
+  );
+
+  return pending.map((e) => escrows.update(e.id, { sellerId: userId }));
+}
+
 export function publicView(escrow) {
   if (!escrow) return null;
   const buyer = escrow.buyerId ? users.get(escrow.buyerId) : null;

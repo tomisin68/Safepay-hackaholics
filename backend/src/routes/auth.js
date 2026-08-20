@@ -14,6 +14,7 @@ import {
   isAuthUserDisabled,
 } from '../services/identity.js';
 import { isDemoAccount, DEMO_EMAIL_DOMAIN } from '../demoData.js';
+import { linkInvitedEscrows } from '../services/escrowEngine.js';
 
 const router = Router();
 
@@ -248,6 +249,11 @@ router.post('/verify-email', verifyLimit, async (req, res, next) => {
 
       await markEmailVerified(userId);
       sendInBackground(() => sendWelcomeEmail({ to: user.email, name: user.name }));
+
+      /* The moment this account stops being inert is the moment it should stop
+       * missing escrows someone invited it to before it existed. See
+       * escrowEngine.linkInvitedEscrows for why this is the right call site. */
+      linkInvitedEscrows(userId, user.email);
     }
 
     users.update(userId, { lastLoginAt: at });

@@ -88,6 +88,50 @@ check('signup never returns the code', !JSON.stringify(r.json).match(/\b\d{6}\b/
 const challengeId = r.json?.challengeId;
 
 /* ------------------------------------------------------------------ *
+ * Invited-before-registered escrow linking
+ *
+ * A buyer invites someone by email who has no SafePay account yet. The
+ * escrow is created with sellerId: null. Once the invited person signs up
+ * and verifies — the moment their account stops being inert — the escrow
+ * must be waiting for them, not orphaned on the email address forever.
+ *
+ * Run early, before the brute-force/guessing block below spends most of the
+ * shared 10-per-minute verify-email rate limit for this IP — this only
+ * needs one clean verification, not a tolerance for a possible 429.
+ * ------------------------------------------------------------------ */
+if (LOG) {
+  const inviteEmail = `invited.${Date.now()}@probe.example`;
+
+  r = await call('/v1/auth/login', { method: 'POST', body: { email: 'ada@safepay.test', password: 'password123' } });
+  const buyerToken = r.json?.token;
+
+  r = await call('/v1/escrows', {
+    method: 'POST',
+    token: buyerToken,
+    body: { type: 'goods', amount: 5000, title: 'Invited-seller probe', sellerEmail: inviteEmail },
+  });
+  const invitedEscrow = r.json?.escrow;
+  check('escrow created inviting an email with no account yet',
+    r.status === 201 && invitedEscrow?.seller?.invited === true, `got ${r.status}`);
+
+  r = await call('/v1/auth/signup', {
+    method: 'POST',
+    body: { name: 'Invited Person', email: inviteEmail, password: PASSWORD },
+  });
+  const inviteChallenge = r.json?.challengeId;
+  const inviteCode = codeFor(inviteEmail);
+  check('the invited person can sign up and gets their own code', /^\d{6}$/.test(inviteCode ?? ''), inviteCode ?? 'none');
+
+  r = await call('/v1/auth/verify-email', { method: 'POST', body: { challengeId: inviteChallenge, code: inviteCode } });
+  check('the invited person verifies', r.status === 200, `got ${r.status} ${r.json?.error?.message ?? ''}`);
+  const inviteToken = r.json?.token;
+
+  r = await call('/v1/escrows', { token: inviteToken });
+  const seen = (r.json?.escrows ?? []).some((e) => e.id === invitedEscrow?.id);
+  check('the invited escrow now appears for the newly registered account', seen);
+}
+
+/* ------------------------------------------------------------------ *
  * Login before verifying must not hand out a session either
  * ------------------------------------------------------------------ */
 r = await call('/v1/auth/login', { method: 'POST', body: { email: unique, password: PASSWORD } });

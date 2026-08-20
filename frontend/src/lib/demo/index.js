@@ -119,6 +119,10 @@ async function route(method, path, query, body, token) {
       });
       engine.recalculate(id);
 
+      /* Demo mode has no OTP gate — signup is the "account becomes real"
+       * moment, so this is where a pending sellerEmail invite gets attached. */
+      engine.linkInvitedEscrows(id, normalised);
+
       const newToken = randomToken();
       sessions.set(newToken, { userId: id, createdAt: now });
       return { status: 201, data: { token: newToken, user: publicUser(users.get(id)) } };
