@@ -59,15 +59,21 @@ export const ESCROW_TYPE_LABELS = {
   in_person: 'In person',
 };
 
+/**
+ * `hint` is the one line under the status stepper, and it is the sentence most
+ * likely to be read carefully by someone who is worried about their money. It
+ * says only what SafePay will actually do — no timers, no promises about what
+ * happens if nobody acts, because nothing happens if nobody acts.
+ */
 export const STATUS_META = {
   created: { label: 'Awaiting funding', tone: 'neutral', hint: 'Nobody has paid yet.' },
-  funded: { label: 'Funds held', tone: 'brand', hint: 'SafePay is holding the money.' },
-  in_progress: { label: 'Delivered', tone: 'warn', hint: 'Seller says it is on the way or done.' },
-  released: { label: 'Released', tone: 'success', hint: 'Money has gone to the seller.' },
-  disputed: { label: 'Disputed', tone: 'danger', hint: 'On hold while we review.' },
-  refunded: { label: 'Refunded', tone: 'neutral', hint: 'Money went back to the buyer.' },
+  funded: { label: 'Funds held', tone: 'brand', hint: 'SafePay is holding the money until the buyer confirms.' },
+  in_progress: { label: 'Delivered', tone: 'warn', hint: 'Seller says it is on the way or done. The buyer confirms next.' },
+  released: { label: 'Released', tone: 'success', hint: 'Money has gone to the seller, less the SafePay fee.' },
+  disputed: { label: 'Disputed', tone: 'danger', hint: 'Frozen. Nothing moves until a reviewer decides.' },
+  refunded: { label: 'Refunded', tone: 'neutral', hint: 'Money went back to the buyer in full.' },
   cancelled: { label: 'Cancelled', tone: 'neutral', hint: 'Closed before any money moved.' },
-  expired: { label: 'Expired', tone: 'neutral', hint: 'Timed out.' },
+  expired: { label: 'Expired', tone: 'neutral', hint: 'Closed without being funded.' },
 };
 
 export const SCORE_TIER_META = {

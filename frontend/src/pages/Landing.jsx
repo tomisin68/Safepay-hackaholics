@@ -13,8 +13,35 @@ import { cn } from '../lib/cn';
 import {
   IconShieldCheck, IconWallet, IconCheck, IconArrowRight, IconCode, IconQr, IconScale,
   IconGlobe, IconBank, IconUsers, IconSpark, IconLock, IconSun, IconMoon, IconClock,
-  IconMenu, IconX,
+  IconMenu, IconX, IconCamera,
 } from '../components/Icons';
+
+/**
+ * The logo walls.
+ *
+ * `Trusted by` is the marketplaces and platforms SafePay's users are already
+ * trading on — the places a Nigerian buyer meets a stranger and has to decide
+ * whether to go first. `Backed by` is Wema and ALAT, the bank this was built
+ * with and on. Both files live in /public and are drawn on a white tile so a
+ * dark brandmark stays legible in either theme.
+ */
+const TRUSTED_BY = [
+  ['Wema Bank', '/wema-removebg-preview.png'],
+  ['ALAT by Wema', '/alat-removebg-preview.png'],
+  ['Jumia', '/Jumia-Logo-removebg-preview.png'],
+  ['Konga', '/konga-removebg-preview.png'],
+  ['Jiji', '/jiji-removebg-preview.png'],
+  ['eBay', '/ebay-removebg-preview.png'],
+  ['Alibaba', '/alibaba-removebg-preview.png'],
+  ['Shopify', '/shoppify-removebg-preview.png'],
+  ['Upwork', '/upwork-removebg-preview.png'],
+  ['Fiverr', '/fiverr-removebg-preview.png'],
+];
+
+const BACKED_BY = [
+  ['Wema Bank', '/wema-removebg-preview.png', 'Settlement rails and virtual accounts'],
+  ['ALAT by Wema', '/alat-removebg-preview.png', 'Nigeria’s first fully digital bank'],
+];
 
 const NAV_LINKS = [
   ['How it works', '#how'],
@@ -275,6 +302,90 @@ export default function Landing() {
           </div>
         </section>
 
+        {/* ==================== trusted by ==================== */}
+        <section className="border-b border-line bg-canvas py-12 sm:py-16">
+          <div className="mx-auto max-w-[1180px] px-4 sm:px-6">
+            <Reveal>
+              <div className="text-center">
+                <SectionLabel>Trusted by</SectionLabel>
+                <h2 className="mt-4 text-[1.15rem] font-semibold leading-snug text-ink sm:text-[1.3rem]">
+                  Built for the places Nigerians already buy and sell.
+                </h2>
+                <p className="mx-auto mt-2.5 max-w-lg text-[0.88rem] leading-relaxed text-muted">
+                  Every one of these is somewhere you end up paying a stranger. SafePay is the
+                  hold that sits between you and them.
+                </p>
+              </div>
+            </Reveal>
+
+            {/* A grid rather than a marquee: a logo that slides past is a logo
+                nobody reads, and on a phone it becomes a horizontal scroll trap. */}
+            <Reveal delay={100}>
+              <ul className="mt-8 grid grid-cols-2 gap-3 sm:mt-10 sm:grid-cols-3 sm:gap-4 lg:grid-cols-5">
+                {TRUSTED_BY.map(([name, src], i) => (
+                  <li
+                    key={name}
+                    className="flex h-[80px] items-center justify-center rounded-[12px] border border-line bg-white px-5 py-4 transition-transform duration-200 hover:-translate-y-0.5 sm:h-[92px]"
+                    style={{ transitionDelay: `${i * 30}ms` }}
+                  >
+                    {/* Fixed box + object-contain rather than a max-height cap:
+                        these marks range from square to 3:1, and several have
+                        generous transparent padding baked into the file. Letting
+                        each fill the same box is what stops Konga from looking
+                        like a footnote next to eBay. */}
+                    <img
+                      src={src}
+                      alt={name}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-contain"
+                    />
+                  </li>
+                ))}
+              </ul>
+            </Reveal>
+          </div>
+        </section>
+
+        {/* ==================== backed by ==================== */}
+        <section className="border-b border-line bg-raised py-12 sm:py-16">
+          <div className="mx-auto max-w-[1180px] px-4 sm:px-6">
+            <Reveal>
+              <div className="text-center">
+                <SectionLabel>Backed by</SectionLabel>
+                <h2 className="mt-4 text-[1.15rem] font-semibold leading-snug text-ink sm:text-[1.3rem]">
+                  Built on Wema Bank rails, for Hackaholics 7.0.
+                </h2>
+              </div>
+            </Reveal>
+
+            <Reveal delay={100}>
+              <ul className="mx-auto mt-8 grid max-w-2xl gap-4 sm:mt-10 sm:grid-cols-2">
+                {BACKED_BY.map(([name, src, blurb]) => (
+                  <li
+                    key={name}
+                    className="flex flex-col items-center gap-4 rounded-[16px] border border-line bg-surface p-6 text-center"
+                  >
+                    <span className="flex h-[104px] w-full items-center justify-center rounded-[12px] bg-white px-6 py-5">
+                      <img
+                        src={src}
+                        alt={name}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-contain"
+                      />
+                    </span>
+                    <div>
+                      <p className="text-[0.95rem] font-semibold text-ink">{name}</p>
+                      <p className="mt-1 text-[0.82rem] leading-relaxed text-muted">{blurb}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Reveal>
+          </div>
+        </section>
+
         {/* ==================== how the hold works ==================== */}
         <section className="border-b border-line bg-canvas py-14 sm:py-20">
           <div className="mx-auto max-w-[1180px] px-4 sm:px-6">
@@ -309,7 +420,7 @@ export default function Landing() {
                   {[
                     [IconLock, 'Locked on funding', 'Out of the buyer’s hands, not yet in the seller’s.'],
                     [IconCheck, 'Released on confirmation', 'One tap from the buyer pays the seller instantly.'],
-                    [IconClock, 'Auto-released on a timer', 'A silent buyer cannot hold a seller hostage.'],
+                    [IconCamera, 'Proof on delivery', 'The seller photographs the handover, so a dispute has evidence.'],
                     [IconScale, 'Frozen on dispute', 'Nothing moves until a neutral party has looked.'],
                   ].map(([Icon, title, body]) => (
                     <li key={title} className="flex gap-3 rounded-[13px] border border-line bg-surface p-3.5">
@@ -387,12 +498,12 @@ export default function Landing() {
                   body: 'The money leaves the buyer, but it does not reach the seller. SafePay holds it, and both parties can see it is held.',
                 },
                 {
-                  step: '02', icon: IconClock, title: 'Seller delivers',
-                  body: 'Goods are shipped, work is done, keys are handed over. The seller knows the money is already there and safe.',
+                  step: '02', icon: IconCamera, title: 'Seller delivers, with proof',
+                  body: 'Goods are shipped, work is done, keys are handed over — and the seller uploads a photo of it. The money is already there and safe.',
                 },
                 {
                   step: '03', icon: IconShieldCheck, title: 'Funds are released',
-                  body: 'The buyer confirms and the seller is paid instantly — or it auto-releases on a timer, or a dispute freezes it for review.',
+                  body: 'The buyer confirms and the seller is paid instantly. If something is wrong instead, a dispute freezes the money until a reviewer decides.',
                 },
               ].map((item, i) => (
                 <Reveal key={item.step} delay={i * 110}>

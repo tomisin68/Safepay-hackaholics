@@ -174,8 +174,8 @@ export default function NewEscrow() {
             <div className="animate-fade">
               <h2 className="text-[1.15rem] font-semibold text-ink">What are you paying for?</h2>
               <p className="mt-1.5 text-[0.88rem] text-muted">
-                This decides how the money is released and how long SafePay waits before it
-                auto-releases.
+                This decides how the money is released — in one go when you confirm, or a
+                milestone at a time as the work lands.
               </p>
 
               <div className="mt-5">

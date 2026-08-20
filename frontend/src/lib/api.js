@@ -133,6 +133,7 @@ async function request(path, { method = 'GET', body, auth = true, signal } = {})
 
 const get = (path, opts) => request(path, { ...opts, method: 'GET' });
 const post = (path, body, opts) => request(path, { ...opts, method: 'POST', body: body ?? {} });
+const put = (path, body, opts) => request(path, { ...opts, method: 'PUT', body: body ?? {} });
 const patch = (path, body, opts) => request(path, { ...opts, method: 'PATCH', body: body ?? {} });
 const del = (path, opts) => request(path, { ...opts, method: 'DELETE' });
 
@@ -164,11 +165,27 @@ export const api = {
     get: (id) => get(`/v1/escrows/${id}`),
     create: (payload) => post('/v1/escrows', payload),
     fund: (id) => post(`/v1/escrows/${id}/fund`),
-    deliver: (id, note) => post(`/v1/escrows/${id}/deliver`, { note }),
+    /** `proof` is `{ dataUrl, fileName }` — a downscaled photo of the handover. */
+    deliver: (id, { note, proof } = {}) => post(`/v1/escrows/${id}/deliver`, { note, proof }),
+    proof: (id) => get(`/v1/escrows/${id}/proof`),
     release: (id) => post(`/v1/escrows/${id}/release`),
     cancel: (id) => post(`/v1/escrows/${id}/cancel`),
     approveMilestone: (id, milestoneId) => post(`/v1/escrows/${id}/milestones/${milestoneId}/approve`),
     claim: (code) => post('/v1/escrows/claim', { code }),
+  },
+
+  /**
+   * The SafePay balance, the mock Wema top-up, and the bank account behind a
+   * withdrawal. Session-scoped: none of this is reachable with an API key.
+   */
+  wallet: {
+    get: () => get('/v1/wallet'),
+    setBank: (payload) => put('/v1/wallet/bank', payload),
+    removeBank: () => del('/v1/wallet/bank'),
+    createTopup: (amountKobo) => post('/v1/wallet/topups', { amountKobo }),
+    getTopup: (id) => get(`/v1/wallet/topups/${id}`),
+    confirmTopup: (id) => post(`/v1/wallet/topups/${id}/confirm`),
+    withdraw: (amountKobo) => post('/v1/wallet/withdrawals', { amountKobo }),
   },
 
   disputes: {
@@ -207,6 +224,5 @@ export const api = {
     flags: () => get('/v1/admin/flags'),
     reviewFlag: (id, action) => post(`/v1/admin/flags/${id}/${action}`),
     users: () => get('/v1/admin/users'),
-    sweep: () => post('/v1/admin/sweep'),
   },
 };

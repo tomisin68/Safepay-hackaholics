@@ -9,9 +9,53 @@ import { api } from '../lib/api';
 import { formatNaira, timeAgo } from '../lib/format';
 import {
   IconScale, IconSpark, IconShieldCheck, IconWallet, IconArrowRight, IconCheck,
+  IconCamera,
 } from '../components/Icons';
 
 const SEVERITY_TONE = { low: 'neutral', medium: 'warn', high: 'danger', critical: 'danger' };
+
+/**
+ * The seller's delivery photo, inline in the dispute card.
+ *
+ * Loaded per dispute rather than with the list: most disputes have no photo,
+ * and the ones that do would otherwise put a megabyte of base64 into a response
+ * that is mostly text.
+ */
+function ProofStrip({ escrowId }) {
+  const [proof, setProof] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.escrows
+      .proof(escrowId)
+      .then((res) => { if (!cancelled) setProof(res.proof); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [escrowId]);
+
+  if (failed) return null;
+
+  return (
+    <div className="mt-4 rounded-[12px] border border-line bg-sunken p-3">
+      <p className="mb-2.5 inline-flex items-center gap-1.5 text-[0.75rem] font-bold uppercase tracking-[0.1em] text-muted">
+        <IconCamera size={13} />
+        Seller&rsquo;s proof of delivery
+      </p>
+      {proof ? (
+        <a href={proof.dataUrl} target="_blank" rel="noreferrer" className="block">
+          <img
+            src={proof.dataUrl}
+            alt="Proof of delivery uploaded by the seller"
+            className="max-h-56 w-full rounded-[9px] border border-line bg-surface object-contain"
+          />
+        </a>
+      ) : (
+        <Skeleton className="h-40 rounded-[9px]" />
+      )}
+    </div>
+  );
+}
 const STATUS_TONE = { open: 'warn', under_review: 'brand', resolved: 'success' };
 const STATUS_LABEL = { open: 'Open', under_review: 'Under review', resolved: 'Resolved' };
 
@@ -146,6 +190,12 @@ export default function Disputes() {
               <blockquote className="mt-4 border-l-2 border-line pl-4 text-[0.87rem] leading-relaxed text-muted">
                 {dispute.reason}
               </blockquote>
+
+              {/* The seller's side of the story, in the only form that is not a
+                  claim. Shown next to the buyer's account of it rather than a
+                  click away, because a reviewer comparing the two is the whole
+                  reason the photo is collected. */}
+              {dispute.escrow?.deliveryProof && <ProofStrip escrowId={dispute.escrowId} />}
 
               {dispute.resolution && (
                 <Alert

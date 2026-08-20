@@ -17,7 +17,7 @@ import {
 const STEPS = [
   { key: 'created', label: 'Created', icon: IconCheck, plain: 'Escrow opened' },
   { key: 'funded', label: 'Funded', icon: IconWallet, plain: 'SafePay is holding the money' },
-  { key: 'in_progress', label: 'Delivered', icon: IconClock, plain: 'Seller marked it sent or done' },
+  { key: 'in_progress', label: 'Delivered', icon: IconClock, plain: 'Seller confirmed the handover' },
   { key: 'released', label: 'Released', icon: IconShieldCheck, plain: 'Money paid out to the seller' },
 ];
 

@@ -298,11 +298,17 @@ curl http://localhost:4600/v1/score/tunde@safepay.test
 | `POST /v1/auth/resend-code` | New code; invalidates the previous one |
 | `POST /v1/auth/login` | Sign in — also fires an alert email |
 | `POST /v1/escrows` | Create |
-| `POST /v1/escrows/:id/fund` | Buyer funds it |
-| `POST /v1/escrows/:id/deliver` | Seller marks delivered |
+| `POST /v1/escrows/:id/fund` | Buyer funds it, from their SafePay balance |
+| `POST /v1/escrows/:id/deliver` | Seller confirms delivery, with an optional photo |
+| `GET /v1/escrows/:id/proof` | The delivery photo — both parties, and admins |
 | `POST /v1/escrows/:id/release` | Buyer releases — irreversible |
 | `POST /v1/escrows/:id/milestones/:mid/approve` | Partial release |
 | `POST /v1/escrows/claim` | Join an in-person escrow by code |
+| `GET /v1/wallet` | Balance, statement and payout account |
+| `POST /v1/wallet/topups` | Open a mock Wema account for one transfer |
+| `POST /v1/wallet/topups/:id/confirm` | "I have already sent it" |
+| `PUT /v1/wallet/bank` | Set the bank account a withdrawal pays into |
+| `POST /v1/wallet/withdrawals` | Withdraw to that account |
 | `POST /v1/disputes` | Raise a dispute (auto-triaged) |
 | `GET /v1/score/:userId` | **Public** trust lookup |
 | `GET /v1/score/:userId/badge.svg` | **Public** embeddable badge |
@@ -312,9 +318,9 @@ curl http://localhost:4600/v1/score/tunde@safepay.test
 ## Deployment
 
 Frontend on Vercel, API on Render. The split is deliberate: the API is a
-long-lived process, which is what the auto-release sweeper, the webhook retry
-queue and the in-process rate limiters all assume. On a serverless platform each
-of those would need re-architecting around a scheduler and an external store.
+long-lived process, which is what the webhook retry queue, the OTP sweeper and
+the in-process rate limiters all assume. On a serverless platform each of those
+would need re-architecting around a scheduler and an external store.
 
 Deploying takes **four variables on Render** and one on Vercel:
 
@@ -359,18 +365,24 @@ Seed the demo data. On a paid instance, from the Render shell:
 npm run seed
 ```
 
-The free plan has no shell, so set this environment variable instead and
-redeploy — the API loads the demo dataset the first time it boots against an
-empty database:
+The free plan has no shell, so `npm run seed` cannot be run by hand. The API
+lays the demo accounts down at boot instead, and does it **additively**: it
+creates the `@safepay.test` accounts that are missing, repairs the password and
+verified flag on the ones already there, and writes the seeded escrow history
+only when those accounts have none at all. Real accounts and real escrows are
+never touched, so it is safe on every restart.
+
+This is on by default. It replaced an earlier `SEED_ON_EMPTY` guard that only
+fired against a completely empty database — which meant the first genuine signup
+permanently locked `admin@safepay.test` out of its own deployment and left
+nobody able to resolve a dispute.
+
+Turn it off before treating this as a real deployment, because the accounts it
+creates share one published password and one of them is an administrator:
 
 ```
-SEED_ON_EMPTY = true
+DEMO_ACCOUNTS = false
 ```
-
-It is guarded twice: opt-in via the environment, and even then it only runs
-when there are zero users. It can populate an empty deploy but never overwrite
-real data, however often the service restarts. If the host has no persistent
-disk and the store resets, the next boot simply re-seeds.
 
 > The free plan sleeps when idle, so the first request after a nap takes ~30s.
 > Wake it before a live demo.
@@ -522,7 +534,7 @@ version is worse than sending nothing:
 |---|---|---|
 | `created` | You opened an escrow with *X* | *X* opened an escrow with you |
 | `claimed` | You joined *X*'s escrow | Your code was claimed |
-| `funded` | Your payment is held, auto-releases on *date* | Safe to start — the money is out of their hands |
+| `funded` | Your payment is held until you release it | Safe to start — the money is out of their hands |
 | `delivered` | *X* says this is delivered | Delivery recorded |
 | `milestone` | You approved *M*, *n* of *m* done | *M* paid, the rest stays in escrow |
 | `released` | This escrow is complete | You have been paid, net of fee |

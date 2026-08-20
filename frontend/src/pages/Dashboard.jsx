@@ -11,7 +11,7 @@ import { api } from '../lib/api';
 import { formatNaira, SCORE_TIER_META } from '../lib/format';
 import {
   IconWallet, IconShieldCheck, IconScale, IconClock, IconPlus, IconArrowRight,
-  IconQr, IconCode, IconAlertTriangle,
+  IconQr, IconCode, IconAlertTriangle, IconBank,
 } from '../components/Icons';
 
 export default function Dashboard() {
@@ -64,17 +64,20 @@ export default function Dashboard() {
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-[124px] rounded-[14px]" />)
         ) : (
           <>
+            {/* Balance first, and it is the wallet balance rather than a total
+                of anything: it is the only figure here that answers "what can
+                I actually spend right now". */}
             <StatTile
-              label="Held in escrow"
-              value={formatNaira(summary.inEscrowKobo, { decimals: false })}
-              sublabel="Safe until you confirm"
+              label="SafePay balance"
+              value={formatNaira(summary.balanceKobo ?? 0, { decimals: false })}
+              sublabel="Available to spend or withdraw"
               icon={IconWallet}
               tone="brand"
             />
             <StatTile
-              label="Released"
-              value={formatNaira(summary.releasedKobo, { decimals: false })}
-              sublabel="Settled successfully"
+              label="Held in escrow"
+              value={formatNaira(summary.inEscrowKobo, { decimals: false })}
+              sublabel="Locked until an escrow settles"
               icon={IconShieldCheck}
               tone="success"
             />
@@ -95,6 +98,27 @@ export default function Dashboard() {
           </>
         )}
       </div>
+
+      {/* Settled money is reported net of the SafePay fee, and the fee is named
+          next to it. Quoting the gross would tell a seller they received a
+          number they never saw in their balance. */}
+      {summary && summary.releasedKobo > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1.5 rounded-[12px] border border-line bg-raised px-4 py-3">
+          <p className="text-[0.82rem] text-muted">
+            Settled through SafePay{' '}
+            <span className="numeric font-semibold text-ink">{formatNaira(summary.releasedKobo)}</span>
+          </p>
+          {summary.feesPaidKobo > 0 && (
+            <p className="text-[0.82rem] text-muted">
+              SafePay fees paid{' '}
+              <span className="numeric font-semibold text-ink">{formatNaira(summary.feesPaidKobo)}</span>
+            </p>
+          )}
+          <Link to="/app/wallet" className="ml-auto text-[0.82rem] font-semibold text-brand-ink hover:underline">
+            Open wallet
+          </Link>
+        </div>
+      )}
 
       <div className="mt-6 grid gap-6 lg:grid-cols-[1.55fr_1fr]">
         <div className="flex flex-col gap-6">
@@ -185,6 +209,7 @@ export default function Dashboard() {
             <CardHeader title="Quick actions" />
             <div className="flex flex-col gap-2">
               {[
+                { to: '/app/wallet', icon: IconBank, title: 'Add money', body: 'Top up by bank transfer' },
                 { to: '/app/claim', icon: IconQr, title: 'Scan a claim code', body: 'Join an in-person escrow' },
                 { to: '/app/disputes', icon: IconScale, title: 'Raise a dispute', body: 'Something went wrong' },
                 { to: '/app/developer', icon: IconCode, title: 'Get API keys', body: 'Add SafePay to your app' },

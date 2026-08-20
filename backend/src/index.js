@@ -12,12 +12,13 @@ import scoreRoutes from './routes/score.js';
 import developerRoutes from './routes/developer.js';
 import adminRoutes from './routes/admin.js';
 import intelligenceRoutes from './routes/intelligence.js';
+import walletRoutes from './routes/wallet.js';
 
 import { ApiError } from './lib/errors.js';
-import { sweepAutoReleases } from './services/escrowEngine.js';
 import {
-  flushNow, users, hydrateFromFirestore, drainSync, storeBackend, storeHealth,
+  flushNow, hydrateFromFirestore, drainSync, storeBackend, storeHealth,
 } from './store/index.js';
+import { ensureDemoData } from './demoData.js';
 import { firebaseReady, projectId } from './lib/firebaseAdmin.js';
 import { mailerReady } from './services/mailer.js';
 import { purgeExpiredChallenges } from './services/otp.js';
@@ -90,6 +91,7 @@ app.get('/', (_req, res) => {
       auth: '/v1/auth',
       verifyEmail: '/v1/auth/verify-email',
       escrows: '/v1/escrows',
+      wallet: '/v1/wallet',
       disputes: '/v1/disputes',
       score: '/v1/score/:userId',
       trustBadge: '/v1/score/:userId/badge.svg',
@@ -108,6 +110,7 @@ app.use('/v1/score', scoreRoutes);
 app.use('/v1/developer', developerRoutes);
 app.use('/v1/admin', adminRoutes);
 app.use('/v1/intelligence', intelligenceRoutes);
+app.use('/v1/wallet', walletRoutes);
 
 /* ------------------------------- API docs -------------------------------- */
 const SPEC = path.resolve(__dirname, '../../docs/openapi.yaml');
@@ -155,10 +158,10 @@ app.use((err, _req, res, _next) => {
 /* ------------------------------ first boot -------------------------------
  * Order matters here, and the ordering is the whole point:
  *
- *   1. pull Firestore into memory, so the seed check below sees the real user
- *      count rather than an empty local mirror. Get this backwards and every
- *      restart re-seeds on top of live data;
- *   2. seed only if that count is genuinely zero;
+ *   1. pull Firestore into memory, so the demo bootstrap below decides against
+ *      the real database rather than an empty local mirror. Get this backwards
+ *      and every restart writes demo accounts on top of live data;
+ *   2. create whatever demo data is missing;
  *   3. only then start listening.
  *
  * Top-level await in an ES module is what makes step 3 safe: no request can
@@ -175,26 +178,34 @@ if (firebaseReady) {
 }
 
 /* Hosts without shell access (Render's free plan, for one) give you no way to
- * run `npm run seed`, so a fresh deploy would come up with an empty database
- * and every demo account bouncing off the login screen. With SEED_ON_EMPTY set,
- * the API seeds itself the first time it finds no users.
+ * run `npm run seed`, so a deploy would come up with no demo accounts and every
+ * judge bouncing off the login screen. This lays them down at boot instead.
  *
- * Guarded twice on purpose. It is opt-in via the environment, and even then it
- * only runs against a database with zero users — so it can populate an empty
- * deploy but can never overwrite real data, however many times the service
- * restarts. If the host has no persistent disk and the store resets, the next
- * boot simply re-seeds. */
-if (process.env.SEED_ON_EMPTY === 'true' && users.count() === 0) {
-  console.log('  Empty database and SEED_ON_EMPTY=true — loading demo data...');
-  // Importing runs the seed script; it is a top-level program, not a module of
-  // helpers. Failure here must not stop the API from serving.
-  await import('./seed.js').catch((err) => console.error('[seed] failed:', err.message));
+ * It is additive, not a seed: it creates the accounts that are missing, repairs
+ * the password and verified flag on the ones that are there, and writes the
+ * escrow history only when the demo accounts have none at all. Real accounts and
+ * real escrows are never touched, so it is safe on every restart — which is the
+ * point. The old version only fired against a completely empty database, so the
+ * first genuine signup permanently locked `admin@safepay.test` out of its own
+ * deployment and left nobody able to resolve a dispute.
+ *
+ * Set DEMO_ACCOUNTS=false to turn it off. Do that before anyone treats this as
+ * a real deployment: the accounts it creates share one published password, and
+ * one of them is an administrator. */
+if (process.env.DEMO_ACCOUNTS !== 'false') {
+  try {
+    const { createdUsers, seededHistory } = ensureDemoData();
+    if (createdUsers.length || seededHistory) {
+      console.log(`  Demo data    ->  created ${createdUsers.length} account(s)`
+        + `${seededHistory ? ' and the seeded escrow history' : ''}`);
+    }
+  } catch (err) {
+    // A failure here must not stop the API from serving real traffic.
+    console.error('[demo] bootstrap failed:', err.message);
+  }
 }
 
 /* --------------------------- background workers -------------------------- */
-const sweeper = setInterval(sweepAutoReleases, 60_000);
-sweeper.unref?.();
-
 /* Spent and expired OTP challenges are dead weight once their window closes, and
  * left alone the collection would only ever grow. Hourly is plenty for rows with
  * a ten-minute life. */
@@ -210,8 +221,8 @@ const server = app.listen(PORT, () => {
   console.log(`  Store        ->  ${storeBackend === 'firestore' ? `Firestore (${projectId})` : 'local JSON file'}`);
   console.log(`  Auth         ->  ${firebaseReady ? 'Firebase Auth mirror active' : 'local only (no Firebase creds)'}`);
   console.log(`  Email        ->  ${mailerReady ? 'Keplars' : 'NOT CONFIGURED - codes print to this log'}`);
+  console.log(`  Demo accounts->  ${process.env.DEMO_ACCOUNTS === 'false' ? 'disabled' : 'enabled (@safepay.test)'}`);
   console.log(`  AI triage    ->  ${process.env.GEMINI_API_KEY ? 'Gemini' : 'rule-based fallback'}\n`);
-  sweepAutoReleases();
 });
 
 let shuttingDown = false;

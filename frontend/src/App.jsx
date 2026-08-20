@@ -9,6 +9,7 @@ import Signup from './pages/Signup';
 import VerifyEmail from './pages/VerifyEmail';
 import Dashboard from './pages/Dashboard';
 import Escrows from './pages/Escrows';
+import Wallet from './pages/Wallet';
 import NewEscrow from './pages/NewEscrow';
 import EscrowDetail from './pages/EscrowDetail';
 import Disputes from './pages/Disputes';
@@ -64,6 +65,7 @@ export default function App() {
 
       <Route path="/app" element={<Protected><Dashboard /></Protected>} />
       <Route path="/app/escrows" element={<Protected><Escrows /></Protected>} />
+      <Route path="/app/wallet" element={<Protected><Wallet /></Protected>} />
       <Route path="/app/new" element={<Protected><NewEscrow /></Protected>} />
       <Route path="/app/escrow/:id" element={<Protected><EscrowDetail /></Protected>} />
       <Route path="/app/disputes" element={<Protected><Disputes /></Protected>} />

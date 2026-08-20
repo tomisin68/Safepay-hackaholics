@@ -12,7 +12,7 @@
 
 const KEY = 'safepay.demo.db';
 /* Bump when the seed shape changes so stale saved databases are rebuilt. */
-const VERSION = 3;
+const VERSION = 4;
 
 const EMPTY = {
   version: VERSION,
@@ -23,6 +23,10 @@ const EMPTY = {
   ledger: {},
   fraudFlags: {},
   sessions: {},
+  walletEntries: {},
+  topups: {},
+  payouts: {},
+  proofs: {},
   meta: { reserveKobo: 0, feesCollectedKobo: 0 },
 };
 
@@ -110,6 +114,13 @@ export const apps = collection('apps');
 export const ledger = collection('ledger');
 export const fraudFlags = collection('fraudFlags');
 export const sessions = collection('sessions');
+export const walletEntries = collection('walletEntries');
+export const topups = collection('topups');
+export const payouts = collection('payouts');
+/* Delivery photos. They live in their own collection here for the same reason
+   they do on the server — and because localStorage has a few megabytes total,
+   so they must not ride along inside every escrow read. */
+export const proofs = collection('proofs');
 
 /* ------------------------------------------------------------------ *
  * Identifiers and passwords

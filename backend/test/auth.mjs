@@ -12,6 +12,13 @@
  *
  * Run the API with its output redirected to a file, then:
  *   SAFEPAY_LOG=/path/to/server.log npm run test:auth
+ *
+ * Probe accounts use `@probe.example`, not `@safepay.test`. The latter is
+ * reserved for the seeded demo accounts, which skip the OTP gate on purpose —
+ * signing up under it is refused, so it cannot be used to test the gate.
+ *
+ * The signup limiter allows 20 requests a minute. Back-to-back runs will trip
+ * it; wait a minute between them.
  */
 
 import fs from 'node:fs';
@@ -59,7 +66,7 @@ function codeFor(email) {
   return null;
 }
 
-const unique = `probe.${Date.now()}@safepay.test`;
+const unique = `probe.${Date.now()}@probe.example`;
 const PASSWORD = 'Str0ng-Test-Passw0rd';
 
 console.log('\n  Email verification gate\n  ' + '-'.repeat(52));
@@ -75,7 +82,7 @@ check('signup returns 202, not 201', r.status === 202, `got ${r.status}`);
 check('signup issues NO token', !r.json?.token, r.json?.token ? 'LEAKED A TOKEN' : '');
 check('signup asks for verification', r.json?.verificationRequired === true);
 check('signup returns a challenge id', typeof r.json?.challengeId === 'string');
-check('signup masks the email', /^p\*+@safepay\.test$/.test(r.json?.email ?? ''), r.json?.email);
+check('signup masks the email', /^p\*+@probe\.example$/.test(r.json?.email ?? ''), r.json?.email);
 check('signup never returns the code', !JSON.stringify(r.json).match(/\b\d{6}\b/));
 
 const challengeId = r.json?.challengeId;
@@ -91,7 +98,7 @@ const loginChallenge = r.json?.challengeId;
 /* Wrong password must stay indistinguishable from an unknown account. */
 r = await call('/v1/auth/login', { method: 'POST', body: { email: unique, password: 'wrong-password-here' } });
 const wrongPw = { status: r.status, message: r.json?.error?.message };
-r = await call('/v1/auth/login', { method: 'POST', body: { email: `nobody.${Date.now()}@safepay.test`, password: 'wrong-password-here' } });
+r = await call('/v1/auth/login', { method: 'POST', body: { email: `nobody.${Date.now()}@probe.example`, password: 'wrong-password-here' } });
 check('wrong password and unknown email are indistinguishable',
   wrongPw.status === r.status && wrongPw.message === r.json?.error?.message,
   `${wrongPw.status}/${r.status}`);
@@ -167,7 +174,7 @@ if (!LOG) {
   /* --------------------------------------------------------------- *
    * Resend rotates the code and invalidates the old one
    * --------------------------------------------------------------- */
-  const second = `probe2.${Date.now()}@safepay.test`;
+  const second = `probe2.${Date.now()}@probe.example`;
   r = await call('/v1/auth/signup', {
     method: 'POST',
     body: { name: 'Probe Two', email: second, password: PASSWORD },
@@ -191,19 +198,37 @@ if (!LOG) {
 }
 
 /* ------------------------------------------------------------------ *
- * Duplicate signup
+ * The demo domain is reserved
+ *
+ * Accounts on it skip the emailed-code gate, so being able to sign up under it
+ * would be a way to mint an unverified account that behaves like a verified
+ * one. This is the assertion that closes that door.
  * ------------------------------------------------------------------ */
+r = await call('/v1/auth/signup', {
+  method: 'POST',
+  body: { name: 'Impostor', email: `sneak.${Date.now()}@safepay.test`, password: PASSWORD },
+});
+check('signing up on the reserved demo domain is refused', r.status === 400, `got ${r.status}`);
+
 r = await call('/v1/auth/signup', {
   method: 'POST',
   body: { name: 'Someone Else', email: 'ada@safepay.test', password: PASSWORD },
 });
-check('signing up over a verified account conflicts', r.status === 409, `got ${r.status}`);
+check('and that holds for an existing demo account too', r.status === 400, `got ${r.status}`);
 
+/* ------------------------------------------------------------------ *
+ * Duplicate signup
+ *
+ * The probe account is verified by this point only when a log was supplied;
+ * either way a second signup at the same address must never mint a session.
+ * ------------------------------------------------------------------ */
 r = await call('/v1/auth/signup', {
   method: 'POST',
   body: { name: 'Probe Account', email: unique, password: 'a-different-password' },
 });
-check('signing up over a verified account conflicts even with a wrong password',
+check('signing up over an existing account never issues a token', !r.json?.token,
+  r.json?.token ? 'LEAKED A TOKEN' : `got ${r.status}`);
+check('signing up over an existing account with the wrong password conflicts',
   r.status === 409, `got ${r.status}`);
 
 /* ------------------------------------------------------------------ *
@@ -223,9 +248,9 @@ check('the admin user list carries no password hashes',
  * Validation
  * ------------------------------------------------------------------ */
 for (const [label, body] of [
-  ['a short password is rejected', { name: 'X Y', email: `v.${Date.now()}@safepay.test`, password: 'short' }],
+  ['a short password is rejected', { name: 'X Y', email: `v.${Date.now()}@probe.example`, password: 'short' }],
   ['a malformed email is rejected', { name: 'X Y', email: 'not-an-email', password: PASSWORD }],
-  ['a missing name is rejected', { email: `v2.${Date.now()}@safepay.test`, password: PASSWORD }],
+  ['a missing name is rejected', { email: `v2.${Date.now()}@probe.example`, password: PASSWORD }],
 ]) {
   r = await call('/v1/auth/signup', { method: 'POST', body });
   check(label, r.status === 400, `got ${r.status}`);

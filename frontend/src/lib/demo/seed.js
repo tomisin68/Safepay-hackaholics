@@ -8,24 +8,37 @@
  */
 
 import {
-  users, escrows, disputes, apps, ledger, fraudFlags, meta,
+  users, escrows, disputes, apps, ledger, fraudFlags, meta, proofs,
+  walletEntries, topups, payouts,
   randomId, claimCode, hashPassword, toKobo, resetAll,
 } from './db.js';
 import { collectFee, record, recalculate, ruleClassify, feeFor } from './engine.js';
+import * as wallet from './wallet.js';
 
 export const DEMO_PASSWORD = 'password123';
 
 const daysAgo = (n) => new Date(Date.now() - n * 864e5).toISOString();
 
+/**
+ * `wallet` is the opening SafePay balance, in naira. Kelechi is deliberately
+ * short of their own outstanding escrow: somebody has to demo the top-up flow,
+ * and a brand-new account with nothing in it is the honest one to pick.
+ */
 export const PEOPLE = [
-  { key: 'ada', name: 'Ada Okonkwo', email: 'ada@safepay.test', tier: 'address', age: 240, role: 'user' },
-  { key: 'tunde', name: 'Tunde Bakare', email: 'tunde@safepay.test', tier: 'bvn_nin', age: 190, role: 'user' },
-  { key: 'chidi', name: 'Chidi Nwosu', email: 'chidi@safepay.test', tier: 'bvn_nin', age: 95, role: 'user' },
-  { key: 'amara', name: 'Amara Eze', email: 'amara@safepay.test', tier: 'phone', age: 40, role: 'user' },
-  { key: 'bola', name: 'Bola Adeyemi', email: 'bola@safepay.test', tier: 'address', age: 320, role: 'user' },
-  { key: 'fresh', name: 'Kelechi Obi', email: 'kelechi@safepay.test', tier: 'phone', age: 1, role: 'user' },
-  { key: 'admin', name: 'SafePay Ops', email: 'admin@safepay.test', tier: 'address', age: 400, role: 'admin' },
+  { key: 'ada', name: 'Ada Okonkwo', email: 'ada@safepay.test', tier: 'address', age: 240, role: 'user', wallet: 3_000_000 },
+  { key: 'tunde', name: 'Tunde Bakare', email: 'tunde@safepay.test', tier: 'bvn_nin', age: 190, role: 'user', wallet: 400_000 },
+  { key: 'chidi', name: 'Chidi Nwosu', email: 'chidi@safepay.test', tier: 'bvn_nin', age: 95, role: 'user', wallet: 900_000 },
+  { key: 'amara', name: 'Amara Eze', email: 'amara@safepay.test', tier: 'phone', age: 40, role: 'user', wallet: 350_000 },
+  { key: 'bola', name: 'Bola Adeyemi', email: 'bola@safepay.test', tier: 'address', age: 320, role: 'user', wallet: 2_000_000 },
+  { key: 'fresh', name: 'Kelechi Obi', email: 'kelechi@safepay.test', tier: 'phone', age: 1, role: 'user', wallet: 150_000 },
+  { key: 'admin', name: 'SafePay Ops', email: 'admin@safepay.test', tier: 'address', age: 400, role: 'admin', wallet: 0 },
 ];
+
+/** A seeded seller already has somewhere to be paid, so withdrawal demos itself. */
+const SEED_BANK = {
+  tunde: { bankCode: '035', bankName: 'Wema Bank', accountNumber: '0123456789', accountName: 'TUNDE BAKARE' },
+  chidi: { bankCode: '035A', bankName: 'ALAT by Wema', accountNumber: '0246813579', accountName: 'CHIDI NWOSU' },
+};
 
 const SEED_ESCROWS = [
   { buyer: 'ada', seller: 'tunde', type: 'goods', amount: 185000, title: 'iPhone 13 Pro, 256GB', description: 'Space grey, battery health 91%. Meeting at Ikeja City Mall.', status: 'released', createdDaysAgo: 62 },
@@ -84,9 +97,22 @@ export async function seedDemoData() {
       verificationTier: p.tier,
       safeScore: 0,
       scoreTier: 'new',
+      walletKobo: 0,
+      bankAccount: SEED_BANK[p.key]
+        ? { ...SEED_BANK[p.key], addedAt: daysAgo(Math.min(p.age, 30)) }
+        : null,
       createdAt: daysAgo(p.age),
       updatedAt: daysAgo(p.age),
     });
+
+    if (p.wallet > 0) {
+      wallet.credit(uid, toKobo(p.wallet), {
+        type: 'topup',
+        note: 'Bank transfer to Wema Bank (demo opening balance)',
+        reference: `SP-SEED-${p.key.toUpperCase()}`,
+        at: daysAgo(Math.min(p.age, 30)),
+      });
+    }
   }
 
   /* --- escrows, replayed through the ledger so the reserve is real --- */
@@ -104,6 +130,9 @@ export async function seedDemoData() {
       fundedAt = daysAgo(spec.createdDaysAgo - 0.2);
       timeline.push({ event: 'funded', at: fundedAt, note: null });
       record({ escrowId: eid, type: 'fund', amountKobo, note: 'Buyer funded escrow, funds held by SafePay' });
+      wallet.debit(id[spec.buyer], amountKobo, {
+        type: 'escrow_fund', note: `Held in escrow: ${spec.title}`, escrowId: eid, at: fundedAt,
+      });
     }
     if (['in_progress', 'released', 'disputed'].includes(spec.status)) {
       timeline.push({ event: 'delivered', at: daysAgo(spec.createdDaysAgo - 0.6), note: 'Dispatched' });
@@ -113,6 +142,12 @@ export async function seedDemoData() {
       timeline.push({ event: 'released', at: releasedAt, note: null });
       collectFee(eid, amountKobo);
       record({ escrowId: eid, type: 'release', amountKobo: amountKobo - feeKobo, note: 'Released to seller (buyer confirmed)' });
+      wallet.credit(id[spec.seller], amountKobo, {
+        type: 'escrow_release', note: `Escrow released: ${spec.title}`, escrowId: eid, at: releasedAt,
+      });
+      wallet.debit(id[spec.seller], feeKobo, {
+        type: 'fee', note: `SafePay fee on ${spec.title}`, escrowId: eid, at: releasedAt,
+      });
     }
     if (spec.status === 'disputed') {
       timeline.push({ event: 'disputed', at: daysAgo(spec.createdDaysAgo - 1), note: null });
@@ -134,10 +169,10 @@ export async function seedDemoData() {
       status: spec.status,
       milestones: spec.milestones ?? null,
       claimCode: spec.type === 'in_person' ? claimCode() : null,
-      autoReleaseAt: ['funded', 'in_progress'].includes(spec.status) ? daysAgo(-(3 + Math.random() * 4)) : null,
       fundedAt,
       releasedAt,
       disputedAt: spec.status === 'disputed' ? daysAgo(spec.createdDaysAgo - 1) : null,
+      deliveryProof: null,
       flagged: false,
       createdAt: created,
       updatedAt: created,
@@ -189,4 +224,7 @@ export async function seedDemoData() {
 }
 
 /** Untouched by the seed, but reset alongside it. */
-export const demoCollections = { users, escrows, disputes, apps, ledger, fraudFlags, meta };
+export const demoCollections = {
+  users, escrows, disputes, apps, ledger, fraudFlags, meta,
+  walletEntries, topups, payouts, proofs,
+};

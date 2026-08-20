@@ -4,7 +4,6 @@ import { sessionAuth, requireAdmin } from '../middleware/auth.js';
 import { notFound } from '../lib/errors.js';
 import { reserveSummary } from '../services/ledger.js';
 import { openFlags } from '../services/fraud.js';
-import { sweepAutoReleases } from '../services/escrowEngine.js';
 
 const router = Router();
 router.use(sessionAuth, requireAdmin);
@@ -67,12 +66,6 @@ router.get('/users', (_req, res) => {
       .map(({ passwordHash, ...u }) => u)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
   });
-});
-
-/** Manual trigger for the auto-release sweep — handy during a live demo. */
-router.post('/sweep', (_req, res) => {
-  const released = sweepAutoReleases();
-  res.json({ released: released.length });
 });
 
 export default router;

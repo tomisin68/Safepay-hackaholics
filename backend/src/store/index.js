@@ -50,6 +50,15 @@ const EMPTY = {
   fraudFlags: {},
   requestLogs: {},
   otpChallenges: {},
+  /* Wallet: the balance itself lives on the user record; these are the
+   * movements behind it, the pending bank transfers that create one, and the
+   * payouts that spend one. */
+  walletEntries: {},
+  topups: {},
+  payouts: {},
+  /* Delivery photos, kept out of the escrow document on purpose: a Firestore
+   * document is capped at 1 MiB and an escrow is read on every list call. */
+  proofs: {},
   meta: { reserveKobo: 0, feesCollectedKobo: 0 },
 };
 
@@ -345,3 +354,7 @@ export const ledger = collection('ledger');
 export const fraudFlags = collection('fraudFlags');
 export const requestLogs = collection('requestLogs');
 export const otpChallenges = collection('otpChallenges');
+export const walletEntries = collection('walletEntries');
+export const topups = collection('topups');
+export const payouts = collection('payouts');
+export const proofs = collection('proofs');

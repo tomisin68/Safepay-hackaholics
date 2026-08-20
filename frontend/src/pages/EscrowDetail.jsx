@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { PageHeader } from '../components/AppShell';
@@ -8,15 +8,17 @@ import { Field, Textarea } from '../components/ui/Form';
 import { StatusStepper, MilestoneList } from '../components/Escrow';
 import { TrustChip } from '../components/Trust';
 import { TransactionRiskCard } from '../components/Intelligence';
+import { AddMoneyFlow } from '../components/Funding';
 import { useAuth, useToast } from '../context/AppProviders';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
+import { ACCEPT_ATTRIBUTE, formatBytes, prepareImageUpload } from '../lib/image';
 import {
-  formatNaira, formatDateTime, timeAgo, ESCROW_TYPE_LABELS, STATUS_META,
+  formatNaira, formatDateTime, ESCROW_TYPE_LABELS, STATUS_META,
 } from '../lib/format';
 import {
-  IconArrowLeft, IconWallet, IconShieldCheck, IconScale, IconClock, IconCheck,
-  IconQr, IconLock, IconX,
+  IconArrowLeft, IconWallet, IconShieldCheck, IconScale, IconCheck, IconCamera,
+  IconImage, IconUpload, IconQr, IconLock, IconX, IconPlus,
 } from '../components/Icons';
 
 export default function EscrowDetail() {
@@ -35,6 +37,8 @@ export default function EscrowDetail() {
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeText, setDisputeText] = useState('');
   const [disputeError, setDisputeError] = useState('');
+  const [deliverOpen, setDeliverOpen] = useState(false);
+  const [balanceKobo, setBalanceKobo] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -45,7 +49,22 @@ export default function EscrowDetail() {
     }
   }, [id]);
 
+  /* The balance decides what the funding dialog can even offer, so it is read
+     alongside the escrow rather than when the dialog opens — by then the user
+     is already looking at a button that may not work. */
+  const loadBalance = useCallback(async () => {
+    try {
+      const wallet = await api.wallet.get();
+      setBalanceKobo(wallet.balanceKobo);
+    } catch {
+      // Not fatal: the funding dialog falls back to asking the API and
+      // reporting whatever it says.
+      setBalanceKobo(null);
+    }
+  }, []);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadBalance(); }, [loadBalance]);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +80,7 @@ export default function EscrowDetail() {
   const escrow = data?.escrow;
   const ledger = data?.ledger ?? [];
   const isBuyer = escrow?.buyer?.id === user?.id;
+  const isSeller = escrow?.seller?.id === user?.id;
   const counterparty = isBuyer ? escrow?.seller : escrow?.buyer;
   const meta = escrow ? STATUS_META[escrow.status] : null;
 
@@ -70,21 +90,28 @@ export default function EscrowDetail() {
       const res = await fn();
       setData((d) => ({ ...d, escrow: res.escrow }));
       await load();
+      await loadBalance();
       toast.success(successTitle, successBody);
     } catch (err) {
       toast.error('That did not work', err.message);
+      throw err;
     } finally {
       setBusy('');
       setConfirm(null);
     }
   };
 
+  /* Swallowed at the call site: `run` rethrows so callers that need to stay
+     open on failure can, and the plain buttons deliberately do not. */
+  const fire = (...args) => { run(...args).catch(() => {}); };
+
   const approveMilestone = async (milestoneId) => {
     setMilestoneBusy(milestoneId);
     try {
       await api.escrows.approveMilestone(id, milestoneId);
       await load();
-      toast.success('Milestone released', 'That portion has been paid to the seller.');
+      await loadBalance();
+      toast.success('Milestone released', 'That portion has been paid to the seller, less the SafePay fee.');
     } catch (err) {
       toast.error('Could not release milestone', err.message);
     } finally {
@@ -168,21 +195,23 @@ export default function EscrowDetail() {
                 <p className="numeric mt-1.5 text-[2.1rem] font-bold leading-none text-ink">
                   {formatNaira(escrow.amountKobo)}
                 </p>
-                <p className="mt-2 text-[0.79rem] text-muted">
-                  Fee <span className="numeric">{formatNaira(escrow.feeKobo)}</span>
-                  {' · '}
-                  seller receives <span className="numeric">{formatNaira(escrow.netToSellerKobo)}</span>
-                </p>
+                {/* Both numbers, always. The buyer pays the top figure and the
+                    seller banks the bottom one; showing only the headline is
+                    how a fee ends up feeling like a surprise. */}
+                <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1.5">
+                  <div className="flex items-baseline gap-1.5">
+                    <dt className="text-[0.78rem] text-muted">SafePay fee</dt>
+                    <dd className="numeric text-[0.82rem] font-semibold text-ink">−{formatNaira(escrow.feeKobo)}</dd>
+                  </div>
+                  <div className="flex items-baseline gap-1.5">
+                    <dt className="text-[0.78rem] text-muted">Seller receives</dt>
+                    <dd className="numeric text-[0.82rem] font-semibold text-ink">{formatNaira(escrow.netToSellerKobo)}</dd>
+                  </div>
+                </dl>
               </div>
 
               <div className="flex flex-col items-start gap-2 sm:items-end">
                 <Pill tone="neutral" size="sm" dot={false}>{ESCROW_TYPE_LABELS[escrow.type]}</Pill>
-                {escrow.autoReleaseAt && ['funded', 'in_progress'].includes(escrow.status) && (
-                  <span className="inline-flex items-center gap-1.5 text-[0.76rem] text-muted">
-                    <IconClock size={13} />
-                    Auto-releases {timeAgo(escrow.autoReleaseAt)}
-                  </span>
-                )}
               </div>
             </div>
 
@@ -204,12 +233,8 @@ export default function EscrowDetail() {
                   </Button>
                 )}
                 {canDeliver && (
-                  <Button
-                    icon={IconCheck}
-                    onClick={() => run('deliver', () => api.escrows.deliver(id), 'Marked as delivered', 'The buyer has been asked to confirm.')}
-                    loading={busy === 'deliver'}
-                  >
-                    Mark as delivered
+                  <Button icon={IconCamera} onClick={() => setDeliverOpen(true)} loading={busy === 'deliver'}>
+                    Confirm delivery
                   </Button>
                 )}
                 {canRelease && (
@@ -220,6 +245,11 @@ export default function EscrowDetail() {
                     loading={busy === 'release'}
                   >
                     Confirm &amp; release funds
+                  </Button>
+                )}
+                {isSeller && escrow.status === 'in_progress' && (
+                  <Button variant="secondary" icon={IconCamera} onClick={() => setDeliverOpen(true)}>
+                    {escrow.deliveryProof ? 'Replace delivery proof' : 'Add delivery proof'}
                   </Button>
                 )}
                 {canDispute && (
@@ -235,6 +265,9 @@ export default function EscrowDetail() {
               </div>
             )}
           </Card>
+
+          {/* ---------- delivery proof ---------- */}
+          {escrow.deliveryProof && <DeliveryProofCard escrowId={id} proof={escrow.deliveryProof} isSeller={isSeller} />}
 
           {/* ---------- milestones ---------- */}
           {escrow.milestones?.length > 0 && (
@@ -375,29 +408,31 @@ export default function EscrowDetail() {
       </div>
 
       {/* ---------- confirmations ---------- */}
-      <Modal
-        open={confirm === 'fund'}
-        onClose={() => setConfirm(null)}
-        title="Fund this escrow?"
-        description={`${formatNaira(escrow.amountKobo)} will leave your account and be held by SafePay. The seller cannot touch it until you confirm delivery.`}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setConfirm(null)}>Cancel</Button>
-            <Button
-              data-autofocus
-              icon={IconWallet}
-              loading={busy === 'fund'}
-              onClick={() => run('fund', () => api.escrows.fund(id), 'Escrow funded', 'The seller can now deliver with confidence.')}
-            >
-              Fund {formatNaira(escrow.amountKobo)}
-            </Button>
-          </>
-        }
-      >
-        <Alert tone="brand" title="Your money stays protected">
-          If the seller does not deliver, raise a dispute and SafePay will not release the funds.
-        </Alert>
-      </Modal>
+      {/* Rendered conditionally rather than kept mounted and hidden: a fresh
+          mount is what resets these forms, with no effect chasing `open`. */}
+      {confirm === 'fund' && (
+        <FundModal
+          onClose={() => { setConfirm(null); loadBalance(); }}
+          escrow={escrow}
+          balanceKobo={balanceKobo}
+          busy={busy === 'fund'}
+          onTopUp={loadBalance}
+          onFund={() => fire('fund', () => api.escrows.fund(id), 'Escrow funded', 'The seller can now deliver with confidence.')}
+        />
+      )}
+
+      {/* ---------- delivery ---------- */}
+      {deliverOpen && (
+        <DeliverModal
+          onClose={() => setDeliverOpen(false)}
+          alreadyDelivered={escrow.status === 'in_progress'}
+          onSubmit={async ({ note, proof }) => {
+            await run('deliver', () => api.escrows.deliver(id, { note, proof }),
+              'Delivery confirmed', 'The buyer has been asked to confirm, and your proof is on file.');
+            setDeliverOpen(false);
+          }}
+        />
+      )}
 
       <Modal
         open={confirm === 'release'}
@@ -412,7 +447,7 @@ export default function EscrowDetail() {
               variant="success"
               icon={IconShieldCheck}
               loading={busy === 'release'}
-              onClick={() => run('release', () => api.escrows.release(id), 'Funds released', 'The seller has been paid.')}
+              onClick={() => fire('release', () => api.escrows.release(id), 'Funds released', 'The seller has been paid.')}
             >
               Yes, release {formatNaira(escrow.netToSellerKobo)}
             </Button>
@@ -436,7 +471,7 @@ export default function EscrowDetail() {
               data-autofocus
               variant="danger"
               loading={busy === 'cancel'}
-              onClick={() => run('cancel', () => api.escrows.cancel(id), 'Escrow cancelled')}
+              onClick={() => fire('cancel', () => api.escrows.cancel(id), 'Escrow cancelled')}
             >
               Cancel escrow
             </Button>
@@ -483,6 +518,303 @@ export default function EscrowDetail() {
           SafePay classifies your dispute the moment you submit it, so it reaches the right
           reviewer without waiting in a queue.
         </Alert>
+      </Modal>
+    </>
+  );
+}
+
+/* ==========================================================================
+   Funding
+   ========================================================================== */
+
+/**
+ * Funding an escrow, in whichever of the two states the buyer is actually in.
+ *
+ * They either have the money in SafePay or they do not, and the dialog says so
+ * before they press anything. If they are short, the top-up flow is right here
+ * with the shortfall already filled in — bouncing someone to a wallet screen to
+ * work out their own arithmetic is how a checkout loses people.
+ */
+function FundModal({ onClose, escrow, balanceKobo, busy, onFund, onTopUp }) {
+  const known = typeof balanceKobo === 'number';
+  const short = known && balanceKobo < escrow.amountKobo;
+  const shortfall = short ? escrow.amountKobo - balanceKobo : 0;
+  const [topUp, setTopUp] = useState(false);
+
+  const showingTopUp = topUp || (short && !known);
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={showingTopUp ? 'Add money first' : 'Fund this escrow?'}
+      description={
+        showingTopUp
+          ? `You need ${formatNaira(shortfall)} more to cover this escrow.`
+          : `${formatNaira(escrow.amountKobo)} moves out of your SafePay balance and is held. The seller cannot touch it until you confirm delivery.`
+      }
+      footer={!showingTopUp && (
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          {short ? (
+            <Button data-autofocus icon={IconPlus} onClick={() => setTopUp(true)}>
+              Add {formatNaira(shortfall)}
+            </Button>
+          ) : (
+            <Button data-autofocus icon={IconWallet} loading={busy} onClick={onFund}>
+              Fund {formatNaira(escrow.amountKobo)}
+            </Button>
+          )}
+        </>
+      )}
+    >
+      {showingTopUp ? (
+        <AddMoneyFlow
+          initialKobo={shortfall}
+          submitLabel="Show me the account number"
+          onFunded={() => { onTopUp?.(); setTopUp(false); }}
+        />
+      ) : (
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center justify-between gap-3 rounded-[12px] border border-line bg-sunken px-3.5 py-3">
+            <span className="text-[0.83rem] text-muted">Your SafePay balance</span>
+            <span className={cn('numeric text-[0.95rem] font-semibold', short ? 'text-danger-ink' : 'text-ink')}>
+              {known ? formatNaira(balanceKobo) : '—'}
+            </span>
+          </div>
+
+          {short ? (
+            <Alert tone="warn" title={`${formatNaira(shortfall)} short`}>
+              Add money to your SafePay balance and this escrow funds straight after.
+            </Alert>
+          ) : (
+            <Alert tone="brand" title="Your money stays protected">
+              If the seller does not deliver, raise a dispute and SafePay will not release the funds.
+            </Alert>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ==========================================================================
+   Delivery, with proof
+   ========================================================================== */
+
+/**
+ * The seller's side of "I have handed this over".
+ *
+ * The photo is optional but pushed hard, and the reason is stated rather than
+ * implied: a buyer who never confirms is the case escrow handles worst, and a
+ * timestamped picture of the handover is the only thing that lets anyone decide
+ * such a dispute on evidence instead of on who sounds more convincing.
+ */
+function DeliverModal({ onClose, onSubmit, alreadyDelivered }) {
+  const [note, setNote] = useState('');
+  const [proof, setProof] = useState(null);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [reading, setReading] = useState(false);
+  const inputRef = useRef(null);
+
+  const pick = async (event) => {
+    const file = event.target.files?.[0];
+    /* Cleared immediately so choosing the same file twice still fires a
+       change event — otherwise a retry after an error does nothing. */
+    event.target.value = '';
+    if (!file) return;
+
+    setReading(true);
+    setError('');
+    try {
+      setProof(await prepareImageUpload(file));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReading(false);
+    }
+  };
+
+  const submit = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await onSubmit({ note: note.trim() || null, proof: proof ? { dataUrl: proof.dataUrl, fileName: proof.fileName } : null });
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={alreadyDelivered ? 'Add proof of delivery' : 'Confirm you have delivered'}
+      description="The buyer sees this immediately, and so does whoever reviews a dispute."
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button data-autofocus icon={IconCheck} loading={busy} disabled={reading} onClick={submit}>
+            {alreadyDelivered ? 'Save proof' : 'Confirm delivery'}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        {error && <Alert tone="danger" title="That did not work">{error}</Alert>}
+
+        <Field
+          label="Proof of delivery"
+          hint="A photo of the item handed over, the parcel with its waybill, or the finished work."
+        >
+          {() => (
+            <>
+              <input
+                ref={inputRef}
+                type="file"
+                accept={ACCEPT_ATTRIBUTE}
+                capture="environment"
+                onChange={pick}
+                className="sr-only"
+              />
+
+              {proof ? (
+                <div className="overflow-hidden rounded-[12px] border border-line">
+                  <img
+                    src={proof.dataUrl}
+                    alt="Your proof of delivery"
+                    className="max-h-64 w-full bg-sunken object-contain"
+                  />
+                  <div className="flex items-center gap-3 border-t border-line bg-raised px-3 py-2.5">
+                    <IconImage size={16} className="shrink-0 text-muted" />
+                    <p className="min-w-0 flex-1 truncate text-[0.78rem] text-muted">
+                      {proof.width}×{proof.height} · {formatBytes(proof.byteSize)}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setProof(null)}
+                      className="shrink-0 rounded-[8px] px-2 py-1 text-[0.76rem] font-semibold text-muted transition-colors hover:bg-sunken hover:text-danger-ink"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                  disabled={reading}
+                  className="flex w-full flex-col items-center justify-center gap-2 rounded-[12px] border-2 border-dashed border-line-strong bg-sunken px-4 py-8 transition-colors hover:border-brand/50 hover:bg-brand-soft/30 disabled:opacity-60"
+                >
+                  <span className="flex h-11 w-11 items-center justify-center rounded-full bg-brand-soft text-brand-ink">
+                    {reading ? <IconUpload size={20} /> : <IconCamera size={20} />}
+                  </span>
+                  <span className="text-[0.88rem] font-semibold text-ink">
+                    {reading ? 'Preparing photo…' : 'Take or choose a photo'}
+                  </span>
+                  <span className="text-[0.76rem] text-muted">Resized in your browser before it is sent</span>
+                </button>
+              )}
+            </>
+          )}
+        </Field>
+
+        <Field label="Anything the buyer should know?" hint="Optional. A tracking number, where you left it, who signed.">
+          {(props) => (
+            <Textarea
+              {...props}
+              rows={3}
+              placeholder="Handed to the buyer at Ikeja City Mall, 4:15pm. They checked the battery health before we parted."
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          )}
+        </Field>
+
+        {!proof && (
+          <Alert tone="warn" title="Delivering without a photo?">
+            You can, but if the buyer goes quiet there is nothing to weigh against their account of
+            it. A picture is what turns a disagreement into a decidable one.
+          </Alert>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/* ==========================================================================
+   Delivery proof, once it exists
+   ========================================================================== */
+
+/**
+ * The photo is fetched on demand rather than riding along inside the escrow:
+ * it is the largest thing in this record by an order of magnitude, and most
+ * views of an escrow never need it.
+ */
+function DeliveryProofCard({ escrowId, proof, isSeller }) {
+  const [image, setImage] = useState(null);
+  const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setImage(null);
+    setError('');
+    api.escrows
+      .proof(escrowId)
+      .then((res) => { if (!cancelled) setImage(res.proof); })
+      .catch((err) => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, [escrowId, proof?.id]);
+
+  return (
+    <>
+      <Card>
+        <CardHeader
+          icon={IconCamera}
+          title="Proof of delivery"
+          description={
+            isSeller
+              ? 'What you uploaded when you confirmed delivery. The buyer can see this too.'
+              : 'Uploaded by the seller when they marked this delivered.'
+          }
+        />
+
+        {error ? (
+          <Alert tone="warn" title="Could not load the photo">{error}</Alert>
+        ) : !image ? (
+          <Skeleton className="h-56 rounded-[12px]" />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="block w-full overflow-hidden rounded-[12px] border border-line transition-colors hover:border-brand/45"
+          >
+            <img
+              src={image.dataUrl}
+              alt="Proof of delivery uploaded by the seller"
+              className="max-h-80 w-full bg-sunken object-contain"
+            />
+          </button>
+        )}
+
+        <p className="mt-3 text-[0.76rem] text-faint">
+          Uploaded {formatDateTime(proof.uploadedAt)}
+          {proof.byteSize ? ` · ${formatBytes(proof.byteSize)}` : ''}
+        </p>
+      </Card>
+
+      <Modal open={open} onClose={() => setOpen(false)} title="Proof of delivery" size="lg">
+        {image && (
+          <img
+            src={image.dataUrl}
+            alt="Proof of delivery uploaded by the seller"
+            className="max-h-[70vh] w-full rounded-[12px] bg-sunken object-contain"
+          />
+        )}
       </Modal>
     </>
   );

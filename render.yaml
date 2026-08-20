@@ -1,8 +1,8 @@
 # Render blueprint for the SafePay API.
 #
 # Render runs a long-lived Node process with a mountable disk, which is what the
-# escrow ledger needs: the JSON store persists, the auto-release sweeper keeps
-# ticking, and webhook retries survive between requests.
+# escrow ledger needs: the JSON store persists, the OTP sweeper keeps ticking,
+# and webhook retries survive between requests.
 #
 # Deploy: Render dashboard -> New -> Blueprint -> pick this repo.
 
@@ -49,10 +49,13 @@ services:
       - key: GEMINI_API_KEY
         sync: false
 
-      # Render's free plan has no shell, so `npm run seed` cannot be run by
-      # hand. This loads the demo data on first boot instead. It fires only
-      # when the database has zero users, so restarts never clobber real data.
-      - key: SEED_ON_EMPTY
+      # The demo accounts (@safepay.test, password123) are created at boot,
+      # because Render's free plan has no shell to run `npm run seed` from.
+      # The bootstrap is additive and idempotent: it only creates what is
+      # missing, so restarts never clobber real data. Set this to "false"
+      # before treating the deployment as real — those accounts share one
+      # published password and one of them is an administrator.
+      - key: DEMO_ACCOUNTS
         value: "true"
 
       - key: PLATFORM_FEE_BPS

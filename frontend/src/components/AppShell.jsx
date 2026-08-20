@@ -12,9 +12,10 @@ import {
 
 const NAV = [
   { to: '/app', label: 'Overview', icon: IconHome, end: true },
-  { to: '/app/escrows', label: 'Escrows', icon: IconWallet },
+  { to: '/app/escrows', label: 'Escrows', icon: IconShieldCheck },
+  { to: '/app/wallet', label: 'Wallet', icon: IconWallet },
   { to: '/app/disputes', label: 'Disputes', icon: IconScale },
-  { to: '/app/trust', label: 'Trust profile', icon: IconShieldCheck },
+  { to: '/app/trust', label: 'Trust profile', icon: IconChart },
   { to: '/app/developer', label: 'Developers', icon: IconCode },
 ];
 

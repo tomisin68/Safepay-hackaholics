@@ -4,21 +4,14 @@
  * weights and the status flow in step with the server if either moves.
  */
 
-import { escrows, disputes, users, ledger, fraudFlags, meta, randomId, claimCode, toNaira, bps } from './db.js';
+import {
+  escrows, disputes, users, ledger, fraudFlags, meta, proofs,
+  randomId, claimCode, toNaira, bps,
+} from './db.js';
+import { DemoError, badRequest, forbidden, notFound, conflict } from './errors.js';
+import * as wallet from './wallet.js';
 
-export class DemoError extends Error {
-  constructor(message, status = 400, code = 'demo_error', details) {
-    super(message);
-    this.status = status;
-    this.code = code;
-    this.details = details;
-  }
-}
-
-const badRequest = (m, d) => new DemoError(m, 400, 'bad_request', d);
-const forbidden = (m) => new DemoError(m, 403, 'forbidden');
-const notFound = (m) => new DemoError(m, 404, 'not_found');
-const conflict = (m, d) => new DemoError(m, 409, 'conflict', d);
+export { DemoError };
 
 /* ==========================================================================
    Ledger
@@ -66,6 +59,10 @@ export function reserveSummary() {
 
 export const entriesFor = (escrowId) =>
   ledger.find((e) => e.escrowId === escrowId).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+/* The wallet is a module of its own — see ./wallet.js — but the demo router
+   reaches everything through the engine, so it is re-exported here. */
+export { wallet };
 
 /* ==========================================================================
    SafeScore
@@ -292,7 +289,15 @@ export function ruleClassify(text = '') {
 
 export const ESCROW_TYPES = ['goods', 'service_milestone', 'rental', 'recurring', 'in_person'];
 
-const AUTO_RELEASE_DAYS = { goods: 7, service_milestone: 14, rental: 3, recurring: 5, in_person: 1 };
+/* There is no timer on a hold. Money leaves an escrow when the buyer confirms,
+   when they approve a milestone, or when an administrator decides a dispute —
+   and at no other moment. An earlier build auto-released after a few days of
+   buyer silence and advertised it all over the UI; SafePay does not do that,
+   so the copy and the clock both had to go. */
+
+/** Base64 characters. Matches the server's ceiling on a delivery photo. */
+const MAX_PROOF_CHARS = 700_000;
+const PROOF_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 export const STATUS_FLOW = {
   created: ['funded', 'cancelled'],
@@ -385,10 +390,10 @@ export function createEscrow({ buyerId, sellerId, sellerEmail, type, amountKobo,
     status: 'created',
     milestones: normalisedMilestones,
     claimCode: type === 'in_person' ? claimCode() : null,
-    autoReleaseAt: null,
     fundedAt: null,
     releasedAt: null,
     disputedAt: null,
+    deliveryProof: null,
     flagged: false,
     createdAt: now,
     updatedAt: now,
@@ -406,22 +411,93 @@ export function fund(id, userId) {
   if (party(escrow, userId) !== 'buyer') throw forbidden('Only the buyer can fund this escrow.');
   assertTransition(escrow.status, 'funded');
 
-  const now = new Date();
-  const autoReleaseAt = new Date(now.getTime() + (AUTO_RELEASE_DAYS[escrow.type] ?? 7) * 864e5);
+  /* Checked before anything is written, so a buyer who cannot cover the escrow
+     gets a 409 carrying the shortfall — which the UI turns into a top-up — and
+     not a half-funded escrow. */
+  wallet.assertCanSpend(userId, escrow.amountKobo);
+
+  wallet.debit(userId, escrow.amountKobo, {
+    type: 'escrow_fund',
+    note: `Held in escrow: ${escrow.title}`,
+    escrowId: id,
+  });
   record({ escrowId: id, type: 'fund', amountKobo: escrow.amountKobo, note: 'Buyer funded escrow, funds held by SafePay' });
 
-  return touch(escrow, {
-    status: 'funded',
-    fundedAt: now.toISOString(),
-    autoReleaseAt: autoReleaseAt.toISOString(),
-  }, 'funded');
+  return touch(escrow, { status: 'funded', fundedAt: new Date().toISOString() }, 'funded');
 }
 
-export function markDelivered(id, userId, note) {
+export function markDelivered(id, userId, note, proof) {
   const escrow = getOrThrow(id);
   if (party(escrow, userId) !== 'seller') throw forbidden('Only the seller can update delivery.');
   assertTransition(escrow.status, 'in_progress');
-  return touch(escrow, { status: 'in_progress', note: note ?? null }, 'delivered');
+
+  const stored = proof ? storeProof(escrow, userId, proof) : null;
+
+  return touch(escrow, {
+    status: 'in_progress',
+    note: note ?? null,
+    ...(stored ? { deliveryProof: stored } : {}),
+  }, 'delivered');
+}
+
+/**
+ * Files the seller's photo of the handover.
+ *
+ * A buyer who goes quiet is the hardest case an escrow has: without evidence
+ * the only honest answer is "we cannot tell". This is that evidence — timestamped,
+ * attributed, and visible to both sides and to whoever decides a dispute.
+ */
+function storeProof(escrow, userId, proof) {
+  const dataUrl = String(proof?.dataUrl ?? '');
+  const match = /^data:([a-z]+\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(dataUrl);
+  if (!match) throw badRequest('Upload a photo as a base64 data URL.');
+
+  const [, contentType, payload] = match;
+  if (!PROOF_TYPES.includes(contentType.toLowerCase())) {
+    throw badRequest('Delivery proof must be a JPEG, PNG or WebP image.');
+  }
+  if (payload.length > MAX_PROOF_CHARS) {
+    throw badRequest('That image is too large. Around 1MB or less, please.');
+  }
+
+  const id = randomId('prf');
+  const uploadedAt = new Date().toISOString();
+  const byteSize = Math.floor((payload.length * 3) / 4);
+  const fileName = proof?.fileName ? String(proof.fileName).slice(0, 120) : null;
+
+  proofs.set(id, {
+    id, escrowId: escrow.id, uploadedById: userId, contentType, dataUrl, fileName, byteSize,
+    createdAt: uploadedAt,
+  });
+
+  return { id, fileName, byteSize, contentType, uploadedAt, uploadedById: userId };
+}
+
+/**
+ * The image behind `escrow.deliveryProof`.
+ *
+ * Both parties may look, and so may an administrator — collecting evidence and
+ * then hiding it from the only person who decides disputes would defeat the
+ * point of collecting it. Nobody else.
+ */
+export function deliveryProof(escrowId, userId) {
+  const escrow = getOrThrow(escrowId);
+  if (users.get(userId)?.role !== 'admin') assertParty(escrow, userId);
+  if (!escrow.deliveryProof?.id) throw notFound('No delivery proof was uploaded for this escrow.');
+
+  const stored = proofs.get(escrow.deliveryProof.id);
+  if (!stored) throw notFound('That delivery proof is no longer available.');
+
+  return {
+    id: stored.id,
+    escrowId: stored.escrowId,
+    dataUrl: stored.dataUrl,
+    contentType: stored.contentType,
+    fileName: stored.fileName,
+    byteSize: stored.byteSize,
+    uploadedById: stored.uploadedById,
+    uploadedAt: stored.createdAt,
+  };
 }
 
 export function release(id, userId) {
@@ -429,12 +505,31 @@ export function release(id, userId) {
   if (userId && party(escrow, userId) !== 'buyer') throw forbidden('Only the buyer can release these funds.');
   assertTransition(escrow.status, 'released');
 
-  collectFee(id, escrow.amountKobo);
-  record({ escrowId: id, type: 'release', amountKobo: escrow.amountKobo - escrow.feeKobo, note: 'Released to seller (buyer confirmed)' });
+  const { fee } = collectFee(id, escrow.amountKobo);
+  record({ escrowId: id, type: 'release', amountKobo: escrow.amountKobo - fee, note: 'Released to seller (buyer confirmed)' });
+
+  /* Net, not gross. The seller's balance is the number they can withdraw, so
+     the fee comes off here rather than being mentioned elsewhere and quietly
+     forgotten. Two entries so the statement shows both halves. */
+  if (escrow.sellerId) payOutToSeller(escrow, escrow.amountKobo, fee, `Escrow released: ${escrow.title}`);
 
   const next = touch(escrow, { status: 'released', releasedAt: new Date().toISOString() }, 'released');
   [escrow.buyerId, escrow.sellerId].filter(Boolean).forEach(recalculate);
   return next;
+}
+
+/**
+ * Moves one settled amount out of the hold and into the seller's wallet, less
+ * the SafePay fee on it. Two entries rather than one net credit, so a seller
+ * can see the gross they earned and the fee they paid.
+ */
+function payOutToSeller(escrow, grossKobo, feeKobo, note) {
+  wallet.credit(escrow.sellerId, grossKobo, { type: 'escrow_release', note, escrowId: escrow.id });
+  if (feeKobo > 0) {
+    wallet.debit(escrow.sellerId, feeKobo, {
+      type: 'fee', note: `SafePay fee on ${escrow.title}`, escrowId: escrow.id,
+    });
+  }
 }
 
 export function approveMilestone(id, milestoneId, userId) {
@@ -452,7 +547,11 @@ export function approveMilestone(id, milestoneId, userId) {
   );
   const allApproved = milestones.every((m) => m.status === 'approved');
 
-  record({ escrowId: id, type: 'milestone_release', amountKobo: target.amountKobo, note: `Milestone released: ${target.title}` });
+  /* The fee is charged per milestone, on the slice being released. Charging it
+     again on the whole escrow at the end billed the last milestone twice. */
+  const { fee } = collectFee(id, target.amountKobo);
+  record({ escrowId: id, type: 'milestone_release', amountKobo: target.amountKobo - fee, note: `Milestone released: ${target.title}` });
+  if (escrow.sellerId) payOutToSeller(escrow, target.amountKobo, fee, `Milestone released: ${target.title}`);
 
   const next = touch(escrow, {
     milestones,
@@ -460,10 +559,7 @@ export function approveMilestone(id, milestoneId, userId) {
     ...(allApproved ? { releasedAt: new Date().toISOString() } : {}),
   }, allApproved ? 'released' : 'milestone_approved');
 
-  if (allApproved) {
-    collectFee(id, escrow.amountKobo);
-    [escrow.buyerId, escrow.sellerId].filter(Boolean).forEach(recalculate);
-  }
+  if (allApproved) [escrow.buyerId, escrow.sellerId].filter(Boolean).forEach(recalculate);
   return next;
 }
 
@@ -479,6 +575,15 @@ export function refund(id, { amountKobo } = {}) {
   assertTransition(escrow.status, 'refunded');
   const amount = amountKobo ?? escrow.amountKobo;
   record({ escrowId: id, type: 'refund', amountKobo: amount, note: 'Refunded to buyer' });
+
+  /* Refunds are whole: no fee is taken on an escrow that did not complete, so
+     the buyer gets back exactly what left their balance. */
+  if (escrow.buyerId) {
+    wallet.credit(escrow.buyerId, amount, {
+      type: 'escrow_refund', note: `Refunded: ${escrow.title}`, escrowId: id,
+    });
+  }
+
   const next = touch(escrow, { status: 'refunded', refundedAt: new Date().toISOString() }, 'refunded');
   [escrow.buyerId, escrow.sellerId].filter(Boolean).forEach(recalculate);
   return next;
@@ -499,14 +604,6 @@ export function claim(code, userId) {
   if (escrow.buyerId && escrow.buyerId !== userId) throw forbidden('This escrow already has a buyer.');
   if (escrow.status !== 'created') throw conflict('This escrow has already been claimed.');
   return touch(escrow, { buyerId: userId }, 'claimed');
-}
-
-export function sweepAutoReleases() {
-  const now = Date.now();
-  const due = escrows.find(
-    (e) => ['funded', 'in_progress'].includes(e.status) && e.autoReleaseAt && new Date(e.autoReleaseAt).getTime() <= now,
-  );
-  return due.map((e) => release(e.id, null));
 }
 
 export function publicView(escrow) {
@@ -532,7 +629,7 @@ export function publicView(escrow) {
       : escrow.sellerEmail
         ? { id: null, name: escrow.sellerEmail, invited: true }
         : null,
-    autoReleaseAt: escrow.autoReleaseAt,
+    deliveryProof: escrow.deliveryProof ?? null,
     fundedAt: escrow.fundedAt,
     releasedAt: escrow.releasedAt,
     disputedAt: escrow.disputedAt ?? null,
@@ -726,4 +823,4 @@ export function assessDisputeRisk(dispute) {
   };
 }
 
-export { badRequest, forbidden, notFound, conflict };
+export { badRequest, forbidden, notFound, conflict } from './errors.js';

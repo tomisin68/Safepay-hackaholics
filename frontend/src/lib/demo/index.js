@@ -16,7 +16,8 @@ import {
   randomId, randomToken, hashPassword, verifyPassword, loadFromDisk,
 } from './db.js';
 import * as engine from './engine.js';
-import { DemoError } from './engine.js';
+import * as wallet from './wallet.js';
+import { DemoError } from './errors.js';
 import { seedDemoData, DEMO_PASSWORD, PEOPLE } from './seed.js';
 
 export { DEMO_PASSWORD, PEOPLE };
@@ -111,6 +112,8 @@ async function route(method, path, query, body, token) {
         verificationTier: phone ? 'phone' : 'none',
         safeScore: 0,
         scoreTier: 'new',
+        walletKobo: 0,
+        bankAccount: null,
         createdAt: now,
         updatedAt: now,
       });
@@ -178,6 +181,12 @@ async function route(method, path, query, body, token) {
 
       const held = mine.filter((e) => ['funded', 'in_progress'].includes(e.status));
       const released = mine.filter((e) => e.status === 'released');
+      /* Net of the SafePay fee on the viewer's own side: a seller who sold for
+         100,000 was paid 98,500, and rounding that up on their dashboard is the
+         kind of small lie that costs a payments product its credibility. */
+      const netFor = (e) =>
+        (e.sellerId === user.id ? (e.netToSellerKobo ?? e.amountKobo - (e.feeKobo ?? 0)) : e.amountKobo);
+
       return {
         status: 200,
         data: {
@@ -185,13 +194,19 @@ async function route(method, path, query, body, token) {
           summary: {
             total: mine.length,
             inEscrowKobo: held.reduce((s, e) => s + e.amountKobo, 0),
-            releasedKobo: released.reduce((s, e) => s + e.amountKobo, 0),
+            releasedKobo: released.reduce((s, e) => s + netFor(e), 0),
             earnedKobo: released
               .filter((e) => e.sellerId === user.id)
               .reduce((s, e) => s + (e.netToSellerKobo ?? e.amountKobo), 0),
+            feesPaidKobo: released
+              .filter((e) => e.sellerId === user.id)
+              .reduce((s, e) => s + (e.feeKobo ?? 0), 0),
+            balanceKobo: wallet.balanceOf(user.id),
             openDisputes: mine.filter((e) => e.status === 'disputed').length,
             awaitingAction: mine.filter(
-              (e) => (e.status === 'created' && e.buyerId === user.id) || (e.status === 'in_progress' && e.buyerId === user.id),
+              (e) => (e.status === 'created' && e.buyerId === user.id)
+                || (e.status === 'in_progress' && e.buyerId === user.id)
+                || (e.status === 'funded' && e.sellerId === user.id),
             ).length,
           },
         },
@@ -215,14 +230,55 @@ async function route(method, path, query, body, token) {
       return { status: 200, data: { escrow: engine.publicView(escrow), ledger: engine.entriesFor(id) } };
     }
 
+    if (method === 'GET' && id && action === 'proof') {
+      return { status: 200, data: { proof: engine.deliveryProof(id, user.id) } };
+    }
+
     if (method === 'POST' && id) {
       if (action === 'fund') return { status: 200, data: { escrow: engine.publicView(engine.fund(id, user.id)) } };
-      if (action === 'deliver') return { status: 200, data: { escrow: engine.publicView(engine.markDelivered(id, user.id, body?.note)) } };
+      if (action === 'deliver') {
+        return {
+          status: 200,
+          data: { escrow: engine.publicView(engine.markDelivered(id, user.id, body?.note, body?.proof)) },
+        };
+      }
       if (action === 'release') return { status: 200, data: { escrow: engine.publicView(engine.release(id, user.id)) } };
       if (action === 'cancel') return { status: 200, data: { escrow: engine.publicView(engine.cancel(id, user.id)) } };
       if (action === 'milestones' && milestoneAction === 'approve') {
         return { status: 200, data: { escrow: engine.publicView(engine.approveMilestone(id, milestoneId, user.id)) } };
       }
+    }
+  }
+
+  /* ----------------------------- wallet ---------------------------- */
+  if (area === 'wallet') {
+    const user = actorFor(token);
+    const [section, id, sub] = rest;
+
+    if (method === 'GET' && !section) return { status: 200, data: wallet.summary(user.id) };
+
+    if (section === 'bank') {
+      if (method === 'PUT') return { status: 200, data: { bankAccount: wallet.setBankAccount(user.id, body ?? {}) } };
+      if (method === 'DELETE') {
+        wallet.removeBankAccount(user.id);
+        return { status: 200, data: { bankAccount: null } };
+      }
+    }
+
+    if (section === 'topups') {
+      if (method === 'POST' && !id) {
+        return { status: 201, data: { topup: wallet.createTopup(user.id, body?.amountKobo) } };
+      }
+      if (method === 'GET' && id && !sub) {
+        return { status: 200, data: { topup: wallet.getTopup(user.id, id) } };
+      }
+      if (method === 'POST' && id && sub === 'confirm') {
+        return { status: 200, data: wallet.confirmTopup(user.id, id) };
+      }
+    }
+
+    if (section === 'withdrawals' && method === 'POST') {
+      return { status: 201, data: wallet.withdraw(user.id, body?.amountKobo) };
     }
   }
 
@@ -513,10 +569,6 @@ async function route(method, path, query, body, token) {
           })),
         },
       };
-    }
-
-    if (method === 'POST' && rest[0] === 'sweep') {
-      return { status: 200, data: { released: engine.sweepAutoReleases().length } };
     }
   }
 

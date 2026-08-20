@@ -158,3 +158,27 @@ export const IconSpinner = ({ size = 18, className = '' }) => (
     <path d="M21 12a9 9 0 00-9-9" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
   </svg>
 );
+
+/* --- delivery proof and the wallet -------------------------------------- */
+export const IconCamera = (p) => (
+  <Svg {...p}>
+    <path d="M3 8.5h3l1.6-2.2h8.8L18 8.5h3v10.5H3z" />
+    <circle cx="12" cy="13.5" r="3.4" />
+  </Svg>
+);
+export const IconImage = (p) => (
+  <Svg {...p}>
+    <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+    <circle cx="8.5" cy="10" r="1.6" />
+    <path d="M4 17l4.8-4.6 3.4 3.2 3-2.6L20 17" />
+  </Svg>
+);
+export const IconUpload = (p) => (
+  <Svg {...p}><path d="M12 16V4.5" /><path d="M7.5 9L12 4.5 16.5 9" /><path d="M4.5 15v3.5A1.5 1.5 0 006 20h12a1.5 1.5 0 001.5-1.5V15" /></Svg>
+);
+export const IconArrowDown = (p) => (
+  <Svg {...p}><path d="M12 4.5v15" /><path d="M6.5 14L12 19.5 17.5 14" /></Svg>
+);
+export const IconArrowUp = (p) => (
+  <Svg {...p}><path d="M12 19.5v-15" /><path d="M6.5 10L12 4.5 17.5 10" /></Svg>
+);

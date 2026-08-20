@@ -377,9 +377,7 @@ const ESCROW_COPY = {
       subject: `You funded ${c.title}`,
       heading: 'Your payment is held in escrow',
       intro: `${c.amount} is now held by SafePay for ${c.title}.`,
-      next: c.autoRelease
-        ? `Release it once you are happy with what you received. If you do nothing it releases automatically on ${c.autoRelease}.`
-        : 'Release it once you are happy with what you received.',
+      next: 'Release it once you are happy with what you received. Nothing moves until you do.',
     }),
     seller: (c) => ({
       subject: `${c.other} funded ${c.title}`,
@@ -394,15 +392,13 @@ const ESCROW_COPY = {
       subject: `${c.other} marked ${c.title} as delivered`,
       heading: 'The seller says this is delivered',
       intro: `${c.other} has marked ${c.title} as delivered.`,
-      next: c.autoRelease
-        ? `Check it over, then release the funds. If nothing happens by ${c.autoRelease} they release automatically.`
-        : 'Check it over, then release the funds. Open a dispute instead if something is wrong.',
+      next: 'Check it over, then release the funds. Open a dispute instead if something is wrong.',
     }),
     seller: (c) => ({
       subject: `You marked ${c.title} as delivered`,
       heading: 'Delivery recorded',
       intro: `You marked ${c.title} as delivered and the buyer has been told.`,
-      next: 'The funds release when they confirm, or automatically if they go quiet.',
+      next: 'The funds release when the buyer confirms. If they go quiet, raise a dispute and we will look at your proof of delivery.',
     }),
   },
 
@@ -482,14 +478,6 @@ const ESCROW_COPY = {
   },
 };
 
-/** Readable in an email, unambiguous across time zones. */
-function emailDate(value) {
-  if (!value) return '';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toUTCString().replace(/ GMT$/, ' UTC');
-}
-
 /**
  * One escrow update, written from one party's side.
  *
@@ -524,7 +512,6 @@ export async function sendEscrowEmail({ to, name, role, event, escrow, otherName
     fee,
     other: otherName || 'the other party',
     invited: Boolean(invited),
-    autoRelease: emailDate(escrow.autoReleaseAt),
     milestone: milestone?.title ?? '',
     milestoneAmount: milestone ? formatNaira(milestone.amountKobo) : '',
     progress: total ? `${approved} of ${total} milestones approved` : '',

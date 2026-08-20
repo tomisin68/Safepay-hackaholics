@@ -6,6 +6,7 @@ import { badRequest } from '../lib/errors.js';
 import { toKobo } from '../lib/money.js';
 import * as engine from '../services/escrowEngine.js';
 import { entriesFor } from '../services/ledger.js';
+import { balanceOf as walletBalance } from '../services/wallet.js';
 
 const router = Router();
 router.use(anyAuth, rateLimit({ windowMs: 60_000, max: 120, name: 'escrows' }));
@@ -70,17 +71,32 @@ router.get('/', (req, res) => {
   });
 });
 
+/**
+ * The numbers behind the dashboard tiles.
+ *
+ * `releasedKobo` is deliberately net of the SafePay fee on the viewer's own
+ * side: a seller who sold for 100,000 was paid 98,500, and showing them the
+ * round number is the kind of small lie that costs a payments product its
+ * credibility. A buyer sees what actually left their balance, which is gross.
+ */
 function summarise(list, userId) {
   const held = list.filter((e) => ['funded', 'in_progress'].includes(e.status));
   const released = list.filter((e) => e.status === 'released');
+  const netFor = (e) =>
+    (e.sellerId === userId ? (e.netToSellerKobo ?? e.amountKobo - (e.feeKobo ?? 0)) : e.amountKobo);
+
   return {
     total: list.length,
     inEscrowKobo: held.reduce((s, e) => s + e.amountKobo, 0),
-    releasedKobo: released.reduce((s, e) => s + e.amountKobo, 0),
+    releasedKobo: released.reduce((s, e) => s + netFor(e), 0),
     earnedKobo: released.filter((e) => e.sellerId === userId).reduce((s, e) => s + (e.netToSellerKobo ?? e.amountKobo), 0),
+    feesPaidKobo: released.filter((e) => e.sellerId === userId).reduce((s, e) => s + (e.feeKobo ?? 0), 0),
+    balanceKobo: walletBalance(userId),
     openDisputes: list.filter((e) => e.status === 'disputed').length,
     awaitingAction: list.filter(
-      (e) => (e.status === 'created' && e.buyerId === userId) || (e.status === 'in_progress' && e.buyerId === userId),
+      (e) => (e.status === 'created' && e.buyerId === userId)
+        || (e.status === 'in_progress' && e.buyerId === userId)
+        || (e.status === 'funded' && e.sellerId === userId),
     ).length,
   };
 }
@@ -121,7 +137,18 @@ const action = (fn) => (req, res, next) => {
 router.post('/:id/fund', action((req) => engine.fund(req.params.id, req.actor.userId)));
 
 router.post('/:id/deliver', action((req) =>
-  engine.markDelivered(req.params.id, req.actor.userId, req.body?.note)));
+  engine.markDelivered(req.params.id, req.actor.userId, req.body?.note, req.body?.proof)));
+
+/* The photo itself, on its own route. Kept out of the escrow payload so a list
+ * of fifty escrows stays a list of fifty escrows. Readable by both parties and
+ * by an administrator reviewing a dispute — see engine.deliveryProof. */
+router.get('/:id/proof', (req, res, next) => {
+  try {
+    res.json({ proof: engine.deliveryProof(req.params.id, req.actor.userId) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 router.post('/:id/release', action((req) =>
   engine.release(req.params.id, req.actor.userId, { reason: 'buyer_confirmed' })));

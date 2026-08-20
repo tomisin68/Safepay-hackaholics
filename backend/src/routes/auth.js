@@ -13,6 +13,7 @@ import {
   syncAuthProfile,
   isAuthUserDisabled,
 } from '../services/identity.js';
+import { isDemoAccount, DEMO_EMAIL_DOMAIN } from '../demoData.js';
 
 const router = Router();
 
@@ -99,6 +100,16 @@ router.post('/signup', authLimit, async (req, res, next) => {
     if (String(password).length > 200) throw badRequest('That password is too long.');
 
     const normalisedEmail = String(email).toLowerCase().trim();
+
+    /* The demo domain is reserved. Its accounts skip the emailed-code gate — see
+     * /login below — so letting anyone sign up under it would turn a convenience
+     * for judges into a way to create an unverified account that behaves like a
+     * verified one. `.test` can never receive mail anyway (RFC 2606), so there
+     * is no legitimate signup to refuse here. */
+    if (normalisedEmail.endsWith(DEMO_EMAIL_DOMAIN)) {
+      throw badRequest(`${DEMO_EMAIL_DOMAIN} is reserved for the SafePay demo accounts. Use a real address.`);
+    }
+
     const existing = users.findOne((u) => u.email === normalisedEmail);
 
     if (existing) {
@@ -124,6 +135,8 @@ router.post('/signup', authLimit, async (req, res, next) => {
       verificationTier: phone ? 'phone' : 'none',
       safeScore: 0,
       scoreTier: 'new',
+      walletKobo: 0,
+      bankAccount: null,
       firebaseUid: null,
       lastLoginAt: null,
       createdAt: now,
@@ -171,8 +184,14 @@ router.post('/login', authLimit, async (req, res, next) => {
     }
 
     /* An unverified account cannot get a token, however correct the password.
-     * This is the same gate as signup, reached from the other direction. */
-    if (!user.emailVerified) {
+     * This is the same gate as signup, reached from the other direction.
+     *
+     * The seeded demo accounts are the one exception, and it is not a loophole:
+     * their addresses are on a reserved domain that cannot receive mail, so a
+     * code sent to one is a code nobody can ever read. Gating them would lock
+     * the demo — the admin console included — out of its own data. Signup on
+     * that domain is refused above, so nobody can mint themselves one. */
+    if (!user.emailVerified && !isDemoAccount(user)) {
       return res.status(202).json(await beginVerification(user, 'login'));
     }
 
@@ -182,10 +201,14 @@ router.post('/login', authLimit, async (req, res, next) => {
     const token = signToken({ sub: user.id, email: user.email, ver: true }, signSecret());
 
     /* The alert is the whole point of knowing about this login, but it must not
-     * sit between the user and their dashboard. Queued, not awaited. */
-    const ip = clientIp(req);
-    const userAgent = clientAgent(req);
-    sendInBackground(() => sendLoginAlertEmail({ to: user.email, name: user.name, ip, userAgent, at }));
+     * sit between the user and their dashboard. Queued, not awaited. Skipped for
+     * demo accounts: every sign-in would be a guaranteed bounce off a reserved
+     * domain, and judges sign in constantly. */
+    if (!isDemoAccount(user)) {
+      const ip = clientIp(req);
+      const userAgent = clientAgent(req);
+      sendInBackground(() => sendLoginAlertEmail({ to: user.email, name: user.name, ip, userAgent, at }));
+    }
 
     res.json({ token, user: publicUser(users.get(user.id)) });
   } catch (err) {
@@ -237,9 +260,11 @@ router.post('/verify-email', verifyLimit, async (req, res, next) => {
 
     /* A first sign-in is still a sign-in. Sending the alert here as well means
      * every session start is accounted for, not just those via /login. */
-    const ip = clientIp(req);
-    const userAgent = clientAgent(req);
-    sendInBackground(() => sendLoginAlertEmail({ to: fresh.email, name: fresh.name, ip, userAgent, at }));
+    if (!isDemoAccount(fresh)) {
+      const ip = clientIp(req);
+      const userAgent = clientAgent(req);
+      sendInBackground(() => sendLoginAlertEmail({ to: fresh.email, name: fresh.name, ip, userAgent, at }));
+    }
 
     res.json({ token, user: publicUser(fresh), score });
   } catch (err) {

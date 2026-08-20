@@ -60,6 +60,10 @@ tags:
     description: Accounts and dashboard sessions.
   - name: Escrows
     description: The escrow lifecycle — create, fund, deliver, release.
+  - name: Wallet
+    description: >
+      Balance, the mock Wema top-up, and bank payouts. Session tokens only — an API key
+      belongs to an app, not to a person.
   - name: Disputes
     description: Raising and resolving disputes, with automatic triage.
   - name: SafeScore
@@ -389,7 +393,14 @@ paths:
     post:
       tags: [Escrows]
       summary: Fund an escrow
-      description: Buyer only. Moves `created` → `funded` and starts the auto-release clock.
+      description: |
+        Buyer only. Moves `created` → `funded`, debiting `amountKobo` from the buyer's
+        SafePay balance. A buyer without enough available returns `409` with
+        `error.details.code = "insufficient_balance"` and the shortfall, so a client can
+        offer a top-up instead of a dead end.
+
+        There is no timer on the hold. A funded escrow stays funded until the buyer
+        releases it, approves its last milestone, or an administrator decides a dispute.
       parameters: [{ $ref: "#/components/parameters/EscrowId" }]
       responses:
         "200": { $ref: "#/components/responses/EscrowResponse" }
@@ -399,8 +410,17 @@ paths:
   /v1/escrows/{id}/deliver:
     post:
       tags: [Escrows]
-      summary: Mark as delivered
-      description: Seller only. Moves `funded` → `in_progress`.
+      summary: Confirm delivery, optionally with proof
+      description: |
+        Seller only. Moves `funded` → `in_progress`.
+
+        `proof` is a photo of the handover — the parcel with its waybill, the item in
+        the buyer's hands, the finished work. It is stored separately from the escrow
+        and the escrow carries only its metadata; fetch the image from
+        `GET /v1/escrows/{id}/proof`.
+
+        Send it as a base64 data URL of at most ~1MB, JPEG, PNG or WebP. The web client
+        downscales in the browser before uploading.
       parameters: [{ $ref: "#/components/parameters/EscrowId" }]
       requestBody:
         content:
@@ -409,9 +429,39 @@ paths:
               type: object
               properties:
                 note: { type: string, example: Dispatched via GIG, tracking 4471. }
+                proof:
+                  type: object
+                  nullable: true
+                  properties:
+                    dataUrl:
+                      type: string
+                      example: data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA...
+                    fileName: { type: string, example: handover.jpg }
       responses:
         "200": { $ref: "#/components/responses/EscrowResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "403": { $ref: "#/components/responses/Forbidden" }
+
+  /v1/escrows/{id}/proof:
+    get:
+      tags: [Escrows]
+      summary: Fetch the delivery proof
+      description: |
+        The image uploaded with `POST /v1/escrows/{id}/deliver`. Readable by either
+        party, and by an administrator reviewing a dispute — evidence nobody who
+        decides disputes can see would be evidence in name only.
+      parameters: [{ $ref: "#/components/parameters/EscrowId" }]
+      responses:
+        "200":
+          description: The proof, as a base64 data URL.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  proof: { $ref: "#/components/schemas/DeliveryProof" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/escrows/{id}/release:
     post:
@@ -466,6 +516,127 @@ paths:
         "200": { $ref: "#/components/responses/EscrowResponse" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+
+  /v1/wallet:
+    get:
+      tags: [Wallet]
+      summary: Balance, statement and payout account
+      description: |
+        The SafePay balance is money that is available right now: it excludes anything
+        held inside a funded escrow, and it is already net of every fee charged. Each
+        entry in `entries` carries the balance it produced, so the statement reconciles.
+
+        Session tokens only. An API key belongs to an app rather than a person, and must
+        never be able to move someone's money to a bank account of its choosing.
+      responses:
+        "200":
+          description: Wallet state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WalletSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/wallet/bank:
+    put:
+      tags: [Wallet]
+      summary: Set the payout account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bankCode, accountNumber, accountName]
+              properties:
+                bankCode: { type: string, example: "035" }
+                accountNumber: { type: string, example: "0123456789" }
+                accountName: { type: string, example: ADA OKONKWO }
+      responses:
+        "200":
+          description: The saved account.
+        "400": { $ref: "#/components/responses/BadRequest" }
+    delete:
+      tags: [Wallet]
+      summary: Remove the payout account
+      responses:
+        "200": { description: Removed. }
+
+  /v1/wallet/topups:
+    post:
+      tags: [Wallet]
+      summary: Open a virtual account for one transfer
+      description: |
+        Returns a Wema account number in SafePay's name, bound to one exact amount and
+        valid for 30 minutes. Any pending top-up for the same user is cancelled first —
+        two live numbers expecting two different amounts is the confusion this avoids.
+
+        **Mocked.** No Wema API is called and the number is generated. In production a
+        bank webhook would credit the balance; here `POST .../confirm` stands in for it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amountKobo: { type: integer, example: 5000000 }
+                amount: { type: number, description: Naira, if you would rather not send kobo. }
+      responses:
+        "201":
+          description: The virtual account.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  topup: { $ref: "#/components/schemas/Topup" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /v1/wallet/topups/{id}/confirm:
+    post:
+      tags: [Wallet]
+      summary: Claim that the transfer was sent
+      description: The mock stand-in for a bank webhook. Idempotent — confirming twice credits once.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Credited.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  topup: { $ref: "#/components/schemas/Topup" }
+                  balanceKobo: { type: integer }
+        "409":
+          description: Expired or cancelled — `error.details.code = "topup_expired"`.
+
+  /v1/wallet/withdrawals:
+    post:
+      tags: [Wallet]
+      summary: Withdraw to the payout account
+      description: |
+        Debits the balance and writes a payout record. Requires a payout account —
+        without one this returns `409` with `error.details.code = "no_bank_account"`.
+
+        **Mocked.** No money leaves SafePay.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amountKobo: { type: integer, example: 5000000 }
+      responses:
+        "201":
+          description: Paid.
+        "409":
+          description: No payout account, or `insufficient_balance` with the shortfall.
 
   /v1/disputes:
     post:
@@ -881,7 +1052,9 @@ components:
           items: { $ref: "#/components/schemas/Milestone" }
         claimCode: { type: string, nullable: true, example: KRT4-9WQP }
         flagged: { type: boolean }
-        autoReleaseAt: { type: string, format: date-time, nullable: true }
+        deliveryProof:
+          allOf: [{ $ref: "#/components/schemas/DeliveryProofMeta" }]
+          nullable: true
         fundedAt: { type: string, format: date-time, nullable: true }
         releasedAt: { type: string, format: date-time, nullable: true }
         createdAt: { type: string, format: date-time }
@@ -898,11 +1071,98 @@ components:
       type: object
       properties:
         total: { type: integer }
+        balanceKobo:
+          type: integer
+          description: The caller's available SafePay balance. Excludes money held in escrow.
         inEscrowKobo: { type: integer }
-        releasedKobo: { type: integer }
+        releasedKobo:
+          type: integer
+          description: >
+            Settled value, net of the SafePay fee on the caller's own side. A seller who
+            sold for 100,000 sees 98,500 here, because that is what reached their balance.
         earnedKobo: { type: integer }
+        feesPaidKobo: { type: integer }
         openDisputes: { type: integer }
         awaitingAction: { type: integer }
+
+    DeliveryProofMeta:
+      type: object
+      description: What the escrow carries. The image itself is at /v1/escrows/{id}/proof.
+      properties:
+        id: { type: string, example: prf_9Kd2mXqRw0PbA1zY }
+        fileName: { type: string, nullable: true, example: handover.jpg }
+        byteSize: { type: integer, example: 148231 }
+        contentType: { type: string, example: image/jpeg }
+        uploadedAt: { type: string, format: date-time }
+        uploadedById: { type: string }
+
+    DeliveryProof:
+      allOf:
+        - $ref: "#/components/schemas/DeliveryProofMeta"
+        - type: object
+          properties:
+            escrowId: { type: string }
+            dataUrl: { type: string, description: base64 data URL of the image. }
+
+    WalletSummary:
+      type: object
+      properties:
+        balanceKobo: { type: integer, example: 15400000 }
+        bankAccount:
+          type: object
+          nullable: true
+          properties:
+            bankCode: { type: string }
+            bankName: { type: string }
+            accountNumber: { type: string }
+            accountName: { type: string }
+            addedAt: { type: string, format: date-time }
+        totals:
+          type: object
+          properties:
+            fundedInKobo: { type: integer }
+            earnedKobo: { type: integer }
+            spentKobo: { type: integer }
+            feesPaidKobo: { type: integer }
+            withdrawnKobo: { type: integer }
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/WalletEntry" }
+        payouts: { type: array, items: { type: object } }
+        banks: { type: array, items: { type: object } }
+        topupExpiryMinutes: { type: integer, example: 30 }
+
+    WalletEntry:
+      type: object
+      description: One movement, signed. Positive credits, negative debits.
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [topup, escrow_fund, escrow_release, escrow_refund, fee, withdrawal]
+        amountKobo: { type: integer, example: -18500000 }
+        balanceAfterKobo: { type: integer }
+        note: { type: string, nullable: true }
+        escrowId: { type: string, nullable: true }
+        reference: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+
+    Topup:
+      type: object
+      description: A mock Wema virtual account, bound to one amount, valid for 30 minutes.
+      properties:
+        id: { type: string, example: top_TNBDqgVIWR1gvdDw }
+        amountKobo: { type: integer, example: 5000000 }
+        bankName: { type: string, example: Wema Bank }
+        bankCode: { type: string, example: "035" }
+        accountNumber: { type: string, example: "9929485198" }
+        accountName: { type: string, example: SafePay }
+        reference: { type: string, example: SP-WR1GVDDW }
+        status: { type: string, enum: [pending, completed, expired, cancelled] }
+        mock: { type: boolean, example: true }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time, nullable: true }
 
     LedgerEntry:
       type: object

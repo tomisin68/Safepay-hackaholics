@@ -41,22 +41,6 @@ export default function Admin() {
     }
   };
 
-  const sweep = async () => {
-    setBusy('sweep');
-    try {
-      const res = await api.admin.sweep();
-      load();
-      toast.success(
-        res.released ? `${res.released} escrow(s) auto-released` : 'Nothing was due',
-        'The sweep runs automatically every minute too.',
-      );
-    } catch (err) {
-      toast.error('Sweep failed', err.message);
-    } finally {
-      setBusy('');
-    }
-  };
-
   if (error) {
     return (
       <>
@@ -74,8 +58,8 @@ export default function Admin() {
         title="Operations console"
         description="Platform health, the Protection Reserve, and everything flagged for a human."
         action={
-          <Button variant="secondary" icon={IconRefresh} loading={busy === 'sweep'} onClick={sweep}>
-            Run auto-release sweep
+          <Button variant="secondary" icon={IconRefresh} onClick={load}>
+            Refresh
           </Button>
         }
       />
