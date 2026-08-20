@@ -4,6 +4,7 @@ import { Button } from '../components/ui/Button';
 import { Card, CardHeader, Alert, EmptyState, Modal, Pill, Skeleton } from '../components/ui/Primitives';
 import { Field, Input, MoneyInput, Select } from '../components/ui/Form';
 import { AddMoneyFlow } from '../components/Funding';
+import { SuccessLottie } from '../components/SuccessLottie';
 import { useToast } from '../context/AppProviders';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
@@ -265,7 +266,7 @@ export default function Wallet() {
           balanceKobo={data?.balanceKobo ?? 0}
           bank={bank}
           onAddBank={() => setSheet('bank')}
-          onDone={() => { setSheet(''); load(); }}
+          onWithdrawn={load}
         />
       )}
 
@@ -284,11 +285,11 @@ export default function Wallet() {
 
 /* ========================================================================== */
 
-function WithdrawModal({ onClose, balanceKobo, bank, onAddBank, onDone }) {
-  const toast = useToast();
+function WithdrawModal({ onClose, balanceKobo, bank, onAddBank, onWithdrawn }) {
   const [amount, setAmount] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [sent, setSent] = useState(null);
 
   const submit = async () => {
     const kobo = toKobo(amount);
@@ -298,14 +299,45 @@ function WithdrawModal({ onClose, balanceKobo, bank, onAddBank, onDone }) {
     setBusy(true);
     try {
       const res = await api.wallet.withdraw(kobo);
-      toast.success('Withdrawal sent', `${formatNaira(res.payout.amountKobo)} to ${bank.bankName}.`);
-      onDone();
+      setSent(res.payout);
+      /* Refresh the page behind the confirmation rather than after it, so the
+         new balance is already there when the dialog is dismissed. */
+      onWithdrawn();
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
   };
+
+  /* Sent. This replaces the toast that used to fire here: a payout landing is
+     the one thing on this page a person actually waits to see. */
+  if (sent) {
+    return (
+      <Modal
+        open
+        onClose={onClose}
+        title="Withdrawal sent"
+        footer={<Button data-autofocus icon={IconCheck} onClick={onClose}>Done</Button>}
+      >
+        <div className="flex flex-col items-center text-center">
+          <SuccessLottie variant="paid" label={`${formatNaira(sent.amountKobo)} sent to your bank`} />
+          <p className="numeric text-[1.5rem] font-bold leading-none text-ink">
+            {formatNaira(sent.amountKobo)}
+          </p>
+          <p className="mt-2.5 text-[0.88rem] leading-relaxed text-muted">
+            on its way to <span className="font-semibold text-ink">{bank.bankName}</span>
+            {' · '}
+            <span className="numeric">{bank.accountNumber}</span>.
+          </p>
+        </div>
+        <Alert tone="brand" title="Simulated payout" className="mt-5">
+          No money left SafePay in this build. Your balance moved and a payout record was
+          written, which is what a real bank transfer would leave behind.
+        </Alert>
+      </Modal>
+    );
+  }
 
   return (
     <Modal

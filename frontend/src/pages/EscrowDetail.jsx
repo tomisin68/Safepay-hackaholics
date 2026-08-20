@@ -9,6 +9,7 @@ import { StatusStepper, MilestoneList } from '../components/Escrow';
 import { TrustChip } from '../components/Trust';
 import { TransactionRiskCard } from '../components/Intelligence';
 import { AddMoneyFlow } from '../components/Funding';
+import { SuccessLottie } from '../components/SuccessLottie';
 import { useAuth, useToast } from '../context/AppProviders';
 import { api } from '../lib/api';
 import { cn } from '../lib/cn';
@@ -34,6 +35,7 @@ export default function EscrowDetail() {
   const [riskError, setRiskError] = useState('');
   const [milestoneBusy, setMilestoneBusy] = useState(null);
   const [confirm, setConfirm] = useState(null);   // 'release' | 'fund' | 'cancel'
+  const [funded, setFunded] = useState(false);    // keeps the fund dialog open on its confirmation
   const [disputeOpen, setDisputeOpen] = useState(false);
   const [disputeText, setDisputeText] = useState('');
   const [disputeError, setDisputeError] = useState('');
@@ -104,6 +106,25 @@ export default function EscrowDetail() {
   /* Swallowed at the call site: `run` rethrows so callers that need to stay
      open on failure can, and the plain buttons deliberately do not. */
   const fire = (...args) => { run(...args).catch(() => {}); };
+
+  /* Funding deliberately does not go through `run`, whose success path is
+     "close the dialog and toast". This is the moment the buyer came here for —
+     their money arriving somewhere safe — so the dialog stays open and shows
+     it, and the confirmation replaces the toast rather than doubling it. */
+  const fundEscrow = async () => {
+    setBusy('fund');
+    try {
+      const res = await api.escrows.fund(id);
+      setData((d) => ({ ...d, escrow: res.escrow }));
+      await load();
+      await loadBalance();
+      setFunded(true);
+    } catch (err) {
+      toast.error('That did not work', err.message);
+    } finally {
+      setBusy('');
+    }
+  };
 
   const approveMilestone = async (milestoneId) => {
     setMilestoneBusy(milestoneId);
@@ -412,12 +433,13 @@ export default function EscrowDetail() {
           mount is what resets these forms, with no effect chasing `open`. */}
       {confirm === 'fund' && (
         <FundModal
-          onClose={() => { setConfirm(null); loadBalance(); }}
+          onClose={() => { setConfirm(null); setFunded(false); loadBalance(); }}
           escrow={escrow}
           balanceKobo={balanceKobo}
           busy={busy === 'fund'}
+          funded={funded}
           onTopUp={loadBalance}
-          onFund={() => fire('fund', () => api.escrows.fund(id), 'Escrow funded', 'The seller can now deliver with confidence.')}
+          onFund={fundEscrow}
         />
       )}
 
@@ -535,13 +557,37 @@ export default function EscrowDetail() {
  * with the shortfall already filled in — bouncing someone to a wallet screen to
  * work out their own arithmetic is how a checkout loses people.
  */
-function FundModal({ onClose, escrow, balanceKobo, busy, onFund, onTopUp }) {
+function FundModal({ onClose, escrow, balanceKobo, busy, funded, onFund, onTopUp }) {
   const known = typeof balanceKobo === 'number';
   const short = known && balanceKobo < escrow.amountKobo;
   const shortfall = short ? escrow.amountKobo - balanceKobo : 0;
   const [topUp, setTopUp] = useState(false);
 
   const showingTopUp = topUp || (short && !known);
+
+  /* Funded. The animation is the answer to "did that work?", so it leads and
+     the numbers follow it, rather than the other way round. */
+  if (funded) {
+    return (
+      <Modal
+        open
+        onClose={onClose}
+        title="Escrow funded"
+        footer={<Button data-autofocus icon={IconCheck} onClick={onClose}>Done</Button>}
+      >
+        <div className="flex flex-col items-center text-center">
+          <SuccessLottie variant="funded" label={`${formatNaira(escrow.amountKobo)} paid into escrow`} />
+          <p className="numeric text-[1.5rem] font-bold leading-none text-ink">
+            {formatNaira(escrow.amountKobo)}
+          </p>
+          <p className="mt-2.5 text-[0.88rem] leading-relaxed text-muted">
+            is held by SafePay until you confirm delivery. The seller can send your order now,
+            knowing the money is already there.
+          </p>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal

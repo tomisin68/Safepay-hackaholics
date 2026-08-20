@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { recolorLottie, SECURE_PAYMENT_PALETTE } from '../lib/lottie';
+import {
+  SECURE_PAYMENT_PALETTE,
+  loadLottieDocument,
+  loadLottiePlayer,
+  recolorLottie,
+} from '../lib/lottie';
 import { useTheme } from '../context/AppProviders';
 import { cn } from '../lib/cn';
 
@@ -13,16 +18,6 @@ import { cn } from '../lib/cn';
  *   - move at all when the visitor has asked for reduced motion — they get the
  *     final frame, which is the resolved state and the one worth showing.
  */
-
-let playerPromise = null;
-const loadPlayer = () => (playerPromise ??= import('lottie-web/build/player/lottie_light'));
-
-let documentPromise = null;
-const loadDocument = () =>
-  (documentPromise ??= fetch(`${import.meta.env.BASE_URL}Secure%20Payment.json`).then((res) => {
-    if (!res.ok) throw new Error(`animation ${res.status}`);
-    return res.json();
-  }));
 
 export function SecurePaymentLottie({ className, label = 'Money held safely in escrow, then released' }) {
   const hostRef = useRef(null);
@@ -56,7 +51,10 @@ export function SecurePaymentLottie({ className, label = 'Money held safely in e
 
     async function start() {
       try {
-        const [{ default: lottie }, doc] = await Promise.all([loadPlayer(), loadDocument()]);
+        const [lottie, doc] = await Promise.all([
+          loadLottiePlayer(),
+          loadLottieDocument('Secure Payment.json'),
+        ]);
         if (cancelled) return;
 
         const anim = lottie.loadAnimation({
